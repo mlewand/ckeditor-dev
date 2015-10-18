@@ -19,7 +19,7 @@
  */
 CKEDITOR.lang[ 'fr' ] = {
 	// ARIA description.
-	editor: 'Éditeur de Texte Enrichi',
+	editor: 'Éditeur de Texte Enrichi foo',
 	editorPanel: 'Tableau de bord de l\'éditeur de texte enrichi',
 
 	// Common messages and labels.
