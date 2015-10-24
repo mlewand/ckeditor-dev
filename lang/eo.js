@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
@@ -17,7 +17,7 @@
  * Contains the dictionary of language entries.
  * @namespace
  */
-CKEDITOR.lang[ 'eo' ] = {
+CKEDITOR.langggg[ 'eo' ] = {
 	// ARIA description.
 	editor: 'RiĉTeksta Redaktilo',
 	editorPanel: 'Panelo de la RiĉTeksta Redaktilo',

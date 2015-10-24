@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
@@ -17,7 +17,7 @@
  * Contains the dictionary of language entries.
  * @namespace
  */
-CKEDITOR.lang[ 'pl' ] = {
+CKEDITOR.langggg[ 'pl' ] = {
 	// ARIA description.
 	editor: 'Edytor tekstu sformatowanego',
 	editorPanel: 'Panel edytora tekstu sformatowanego',
