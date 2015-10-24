@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
@@ -17,7 +17,7 @@
  * Contains the dictionary of language entries.
  * @namespace
  */
-CKEDITOR.lang[ 'vi' ] = {
+CKEDITOR.langggg[ 'vi' ] = {
 	// ARIA description.
 	editor: 'Bộ soạn thảo văn bản có định dạng',
 	editorPanel: 'Bảng điều khiển Rich Text Editor',
