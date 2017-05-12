@@ -1,5 +1,5 @@
-﻿/*
-Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
+/*
+Copyright (c) 2003-2017, CKSource - Frederico Knabben. All rights reserved.
 For licensing, see LICENSE.md or http://ckeditor.com/license
 */
 CKEDITOR.plugins.setLang( 'forms', 'nb', {
@@ -33,7 +33,7 @@ CKEDITOR.plugins.setLang( 'forms', 'nb', {
 	select: {
 		title: 'Egenskaper for rullegardinliste',
 		selectInfo: 'Info',
-		opAvail: 'Tilgjenglige alternativer',
+		opAvail: 'Tilgjengelige alternativer',
 		value: 'Verdi',
 		size: 'Størrelse',
 		lines: 'Linjer',

@@ -1,5 +1,5 @@
 ﻿/**
- * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
+ * @license Copyright (c) 2003-2017, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
 
@@ -10,7 +10,7 @@
 
 	CKEDITOR.plugins.add( 'autoembed', {
 		requires: 'autolink,undo',
-		lang: 'cs,en,it,nb,pl,zh', // %REMOVE_LINE_CORE%
+		lang: 'az,ca,cs,de,de-ch,en,eo,es,eu,fr,it,km,ko,ku,mk,nb,nl,oc,pl,pt,pt-br,ru,sk,sv,tr,ug,uk,zh,zh-cn', // %REMOVE_LINE_CORE%
 		init: function( editor ) {
 			var currentId = 1,
 				embedCandidatePasted;
@@ -57,10 +57,7 @@
 			widgetDef = CKEDITOR.plugins.autoEmbed.getWidgetDefinition( editor, href );
 
 		if ( !widgetDef ) {
-			window.console && window.console.log(
-				'[CKEDITOR.plugins.autoEmbed] Incorrect config.autoEmbed_widget value. ' +
-				'No widget definition found.'
-			);
+			CKEDITOR.warn( 'autoembed-no-widget-def' );
 			return;
 		}
 
@@ -84,15 +81,53 @@
 			noNotifications: true,
 			callback: function() {
 					// DOM might be invalidated in the meantime, so find the anchor again.
-				var anchor = editor.editable().findOne( 'a[data-cke-autoembed="' + id + '"]' ),
-					range = editor.createRange();
+				var anchor = editor.editable().findOne( 'a[data-cke-autoembed="' + id + '"]' );
 
 				// Anchor might be removed in the meantime.
 				if ( anchor ) {
-					range.setStartAt( anchor, CKEDITOR.POSITION_BEFORE_START );
-					range.setEndAt( anchor, CKEDITOR.POSITION_AFTER_END );
+					var selection = editor.getSelection(),
+						insertRange = editor.createRange(),
+						editable = editor.editable();
 
-					editor.editable().insertElementIntoRange( wrapper, range );
+					// Save the changes in editor contents that happened *after* the link was pasted
+					// but before it gets embedded (i.e. user pasted and typed).
+					editor.fire( 'saveSnapshot' );
+
+					// Lock snapshot so we don't make unnecessary undo steps in
+					// editable.insertElement() below, which would include bookmarks. (#13429)
+					editor.fire( 'lockSnapshot', { dontUpdate: true } );
+
+					// Bookmark current selection. (#13429)
+					var bookmark = selection.createBookmarks( false )[ 0 ],
+						startNode = bookmark.startNode,
+						endNode = bookmark.endNode || startNode;
+
+					// When url is pasted, IE8 sets the caret after <a> element instead of inside it.
+					// So, if user hasn't changed selection, bookmark is inserted right after <a>.
+					// Then, after pasting embedded content, bookmark is still in DOM but it is
+					// inside the original element. After selection recreation it would end up before widget:
+					// <p>A <a /><bm /></p><p>B</p>  -->  <p>A <bm /></p><widget /><p>B</p>  -->  <p>A ^</p><widget /><p>B</p>
+					// We have to fix this IE8 behavior so it is the same as on other browsers.
+					if ( CKEDITOR.env.ie && CKEDITOR.env.version < 9 && !bookmark.endNode && startNode.equals( anchor.getNext() ) ) {
+						anchor.append( startNode );
+					}
+
+					insertRange.setStartBefore( anchor );
+					insertRange.setEndAfter( anchor );
+
+					editable.insertElement( wrapper, insertRange );
+
+					// If both bookmarks are still in DOM, it means that selection was not inside
+					// an anchor that got substituted. We can safely recreate that selection. (#13429)
+					if ( editable.contains( startNode ) && editable.contains( endNode ) ) {
+						selection.selectBookmarks( [ bookmark ] );
+					} else {
+						// If one of bookmarks is not in DOM, clean up leftovers.
+						startNode.remove();
+						endNode.remove();
+					}
+
+					editor.fire( 'unlockSnapshot' );
 				}
 
 				notification.hide();
@@ -146,16 +181,16 @@
 
 	/**
 	 * Specifies the widget to use to automatically embed a link. The default value
-	 * of this option defines that either the [Embed](ckeditor.com/addon/embed) or
-	 * [Semantic Embed](ckeditor.com/addon/embedsemantic) widgets will be used, depending on which is enabled.
+	 * of this option defines that either the [Media Embed](ckeditor.com/addon/embed) or
+	 * [Semantic Media Embed](ckeditor.com/addon/embedsemantic) widgets will be used, depending on which is enabled.
 	 *
 	 * The general behavior:
 	 *
 	 * * If a string (widget names separated by commas) is provided, then the first of the listed widgets which is registered
-	 * will be used. For example, if `'foo,bar,bom'` is set and widgets `'bar'` and `'bom'` are registered, then `'bar'`
-	 * will be used.
+	 *   will be used. For example, if `'foo,bar,bom'` is set and widgets `'bar'` and `'bom'` are registered, then `'bar'`
+	 *   will be used.
 	 * * If a callback is specified, then it will be executed with the URL to be embedded and it should return the
-	 * name of the widget to be used. It allows to use different embed widgets for different URLs.
+	 *   name of the widget to be used. It allows to use different embed widgets for different URLs.
 	 *
 	 * Example:
 	 *
@@ -168,6 +203,9 @@
 	 *
 	 * **Note:** Plugin names are always lower case, while widget names are not, so widget names do not have to equal plugin names.
 	 * For example, there is the `embedsemantic` plugin and the `embedSemantic` widget.
+	 *
+	 * Read more in the [documentation](#!/guide/dev_media_embed-section-automatic-embedding-on-paste)
+	 * and see the [SDK sample](http://sdk.ckeditor.com/samples/mediaembed.html).
 	 *
 	 * @since 4.5
 	 * @cfg {String/Function} [autoEmbed_widget='embed,embedSemantic']

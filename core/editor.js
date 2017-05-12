@@ -1,5 +1,5 @@
 /**
- * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
+ * @license Copyright (c) 2003-2017, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
 
@@ -180,7 +180,11 @@
 
 		// Return the editor instance immediately to enable early stage event registrations.
 		CKEDITOR.tools.setTimeout( function() {
-			initConfig( this, instanceConfig );
+			if ( this.status !== 'destroyed' ) {
+				initConfig( this, instanceConfig );
+			} else {
+				CKEDITOR.warn( 'editor-incorrect-destroy' );
+			}
 		}, 0, this );
 	}
 
@@ -545,9 +549,7 @@
 
 				if ( requires && ( match = requires.match( removeRegex ) ) ) {
 					while ( ( name = match.pop() ) ) {
-						CKEDITOR.tools.setTimeout( function( name, pluginName ) {
-							throw new Error( 'Plugin "' + name.replace( ',', '' ) + '" cannot be removed from the plugins list, because it\'s required by "' + pluginName + '" plugin.' );
-						}, 0, null, [ name, pluginName ] );
+						CKEDITOR.error( 'editor-plugin-required', { plugin: name.replace( ',', '' ), requiredBy: pluginName } );
 					}
 				}
 
@@ -650,6 +652,72 @@
 	// Always returns ENTER_BR in case of blockless editor.
 	function validateEnterMode( editor, enterMode ) {
 		return editor.blockless ? CKEDITOR.ENTER_BR : enterMode;
+	}
+
+	// Create DocumentFragment from specified ranges. For now it handles only tables
+	// and returns DocumentFragment from the 1. range for other cases. (#13884)
+	function createDocumentFragmentFromRanges( ranges, editable ) {
+		var docFragment = new CKEDITOR.dom.documentFragment(),
+			tableClone,
+			currentRow,
+			currentRowClone;
+
+		// We must handle two cases here:
+		// 1. <tr>[<td>Cell</td>]</tr> (IE9+, Edge, Chrome, Firefox)
+		// 2. <td>[Cell]</td> (IE8-, Safari)
+		function isSelectedCell( range ) {
+			var start = range.startContainer,
+				end = range.endContainer;
+
+			if ( start.is && ( start.is( 'tr' ) ||
+				( start.is( 'td' ) && start.equals( end ) && range.endOffset === start.getChildCount() ) ) ) {
+				return true;
+			}
+
+			return false;
+		}
+
+		function cloneCell( range ) {
+			var start = range.startContainer;
+
+			if ( start.is( 'tr' ) ) {
+				return range.cloneContents();
+			}
+
+			return start.clone( true );
+		}
+
+		for ( var i = 0; i < ranges.length; i++ ) {
+			var range = ranges[ i ],
+				container = range.startContainer.getAscendant( 'tr', true );
+
+			if ( isSelectedCell( range ) ) {
+				if ( !tableClone ) {
+					tableClone = container.getAscendant( 'table' ).clone();
+					tableClone.append( container.getAscendant( { thead: 1, tbody: 1, tfoot: 1 } ).clone() );
+					docFragment.append( tableClone );
+					tableClone = tableClone.findOne( 'thead, tbody, tfoot' );
+				}
+
+				if ( !( currentRow && currentRow.equals( container ) ) ) {
+					currentRow = container;
+					currentRowClone = container.clone();
+					tableClone.append( currentRowClone );
+				}
+
+				currentRowClone.append( cloneCell( range ) );
+			} else {
+				// If there was something else copied with table,
+				// append it to DocumentFragment.
+				docFragment.append( range.cloneContents() );
+			}
+		}
+
+		if ( !tableClone ) {
+			return editable.getHtmlFromRange( ranges[ 0 ] );
+		}
+
+		return docFragment;
 	}
 
 	CKEDITOR.tools.extend( CKEDITOR.editor.prototype, {
@@ -763,8 +831,11 @@
 
 			this.editable( null );
 
-			this.filter.destroy();
-			delete this.filter;
+			if ( this.filter ) {
+				this.filter.destroy();
+				delete this.filter;
+			}
+
 			delete this.activeFilter;
 
 			this.status = 'destroyed';
@@ -1128,7 +1199,7 @@
 				return null;
 			}
 
-			var docFragment = editable.getHtmlFromRange( ranges[ 0 ] );
+			var docFragment = createDocumentFragmentFromRanges( ranges, editable );
 
 			return toString ? docFragment.getHtml() : docFragment;
 		},
@@ -1152,17 +1223,20 @@
 		 */
 		extractSelectedHtml: function( toString, removeEmptyBlock ) {
 			var editable = this.editable(),
-				ranges = this.getSelection().getRanges();
+				ranges = this.getSelection().getRanges(),
+				docFragment = new CKEDITOR.dom.documentFragment(),
+				i;
 
 			if ( !editable || ranges.length === 0 ) {
 				return null;
 			}
 
-			var range = ranges[ 0 ],
-				docFragment = editable.extractHtmlFromRange( range, removeEmptyBlock );
+			for ( i = 0; i < ranges.length; i++ ) {
+				docFragment.append( editable.extractHtmlFromRange( ranges[ i ], removeEmptyBlock ) );
+			}
 
 			if ( !removeEmptyBlock ) {
-				this.getSelection().selectRanges( [ range ] );
+				this.getSelection().selectRanges( [ ranges[ 0 ] ] );
 			}
 
 			return toString ? docFragment.getHtml() : docFragment;
@@ -1275,6 +1349,38 @@
 				else
 					delete keystrokes[ keystroke ];
 			}
+		},
+
+		/**
+		 * Returns the keystroke that is assigned to a specified {@link CKEDITOR.command}. If no keystroke is assigned,
+		 * it returns `null`.
+		 *
+		 * Since version 4.7.0 this function also accepts a `command` parameter as a string.
+		 *
+		 * @since 4.6.0
+		 * @param {CKEDITOR.command/String} command The {@link CKEDITOR.command} instance or a string with the command name.
+		 * @returns {Number/null} The keystroke assigned to the provided command or `null` if there is no keystroke.
+		 */
+		getCommandKeystroke: function( command ) {
+			var commandInstance = ( typeof command === 'string' ? this.getCommand( command ) : command );
+
+			if ( commandInstance ) {
+				var commandName = commandInstance && commandInstance.name,
+					keystrokes = this.keystrokeHandler.keystrokes,
+					key;
+
+				// Some commands have a fake keystroke - for example CUT/COPY/PASTE commands are handled natively.
+				if ( commandInstance.fakeKeystroke ) {
+					return commandInstance.fakeKeystroke;
+				}
+
+				for ( key in keystrokes ) {
+					if ( keystrokes.hasOwnProperty( key ) && keystrokes[ key ] == commandName ) {
+						return key;
+					}
+				}
+			}
+			return null;
 		},
 
 		/**
@@ -1446,6 +1552,9 @@ CKEDITOR.ELEMENT_MODE_INLINE = 3;
  * If `true`, makes the editor start in read-only state. Otherwise, it will check
  * if the linked `<textarea>` element has the `disabled` attribute.
  *
+ * Read more in the [documentation](#!/guide/dev_readonly)
+ * and see the [SDK sample](http://sdk.ckeditor.com/samples/readonly.html).
+ *
  *		config.readOnly = true;
  *
  * @since 3.6
@@ -1455,7 +1564,7 @@ CKEDITOR.ELEMENT_MODE_INLINE = 3;
  */
 
 /**
- * Sets whether an editable element should have focus when the editor is loading for the first time.
+ * Whether an editable element should have focus when the editor is loading for the first time.
  *
  *		config.startupFocus = true;
  *
@@ -1465,8 +1574,9 @@ CKEDITOR.ELEMENT_MODE_INLINE = 3;
 
  /**
  * Customizes the {@link CKEDITOR.editor#title human-readable title} of this editor. This title is displayed in
- * tooltips and impacts various accessibility aspects, e.g. it is commonly used by screen readers
- * for distinguishing editor instances and for navigation. Accepted values are a string or `false`.
+ * tooltips and impacts various [accessibility aspects](#!/guide/dev_a11y-section-announcing-the-editor-on-the-page),
+ * e.g. it is commonly used by screen readers for distinguishing editor instances and for navigation.
+ * Accepted values are a string or `false`.
  *
  * **Note:** When `config.title` is set globally, the same value will be applied to all editor instances
  * loaded with this config. This may adversely affect accessibility as screen reader users will be unable
@@ -1757,6 +1867,14 @@ CKEDITOR.ELEMENT_MODE_INLINE = 3;
  * in any plugin.
  *
  * @event destroy
+ * @param {CKEDITOR.editor} editor This editor instance.
+ */
+
+/**
+ * Event fired when the {@link #method-destroy} method is called,
+ * but before destroying the editor.
+ *
+ * @event beforeDestroy
  * @param {CKEDITOR.editor} editor This editor instance.
  */
 

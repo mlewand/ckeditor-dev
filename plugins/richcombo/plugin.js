@@ -1,5 +1,5 @@
-﻿/**
- * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
+/**
+ * @license Copyright (c) 2003-2017, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
 
@@ -189,15 +189,6 @@ CKEDITOR.plugins.add( 'richcombo', {
 
 					var keystroke = ev.getKeystroke();
 
-					// ARROW-DOWN
-					// This call is duplicated in plugins/toolbar/plugin.js in itemKeystroke().
-					// Move focus to the first element after drop down was opened by the arrow down key.
-					if ( keystroke == 40 ) {
-						editor.once( 'panelShow', function( evt ) {
-							evt.data._.panel._.currentBlock.onKeyDown( 40 );
-						} );
-					}
-
 					switch ( keystroke ) {
 						case 13: // ENTER
 						case 32: // SPACE
@@ -266,12 +257,6 @@ CKEDITOR.plugins.add( 'richcombo', {
 
 					if ( me.onOpen )
 						me.onOpen();
-
-					// The "panelShow" event is fired assinchronously, after the
-					// onShow method call.
-					editor.once( 'panelShow', function() {
-						list.focus( !list.multiSelect && me.getValue() );
-					} );
 				};
 
 				panel.onHide = function( preventOnClose ) {

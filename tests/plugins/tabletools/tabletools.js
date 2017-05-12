@@ -5,7 +5,9 @@
 	'use strict';
 
 	bender.editor = {
-		config: {},
+		config: {
+			tableImprovements: false
+		},
 		allowedForTests: 'table[width];td[id]'
 	};
 
@@ -181,6 +183,48 @@
 		// (#10308)
 		'test remove trailing cell': function() {
 			this.doTest( 'delete-cell-trailing', 'cellDelete' );
+		},
+
+		'test background color conversion': function() {
+			var bot = this.editorBot;
+
+			bender.tools.testInputOut( 'background-conversion', function( source, expected ) {
+				bot.setHtmlWithSelection( source );
+				assert.beautified.html( expected, bot.getData( true ) );
+			} );
+		},
+
+		// (#16971)
+		'test background color extraction': function() {
+			var bot = this.editorBot;
+
+			bender.tools.testInputOut( 'background-extraction', function( source, expected ) {
+				if ( CKEDITOR.env.ie && CKEDITOR.env.version === 8 ) {
+					// Just a regular IE quirks.
+					expected = expected.replace( 'no-repeat center #00cc99', '#00cc99 no-repeat center 50%' );
+				}
+				bot.setHtmlWithSelection( source );
+				assert.beautified.html( expected, bot.getData( true ) );
+			} );
+		},
+
+		'test valign conversion': function() {
+			var bot = this.editorBot;
+
+			bender.tools.testInputOut( 'align-conversion', function( source, expected ) {
+				bot.setHtmlWithSelection( source );
+				assert.beautified.html( expected, bot.getData( true ) );
+			} );
+		},
+
+		// (#16818)
+		'test row height conversion': function() {
+			var bot = this.editorBot;
+
+			bender.tools.testInputOut( 'row-height-conversion', function( source, expected ) {
+				bot.setHtmlWithSelection( source );
+				assert.beautified.html( expected, bot.getData( true ) );
+			} );
 		}
 	} );
 } )();

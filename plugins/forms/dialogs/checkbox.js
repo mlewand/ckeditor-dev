@@ -1,5 +1,5 @@
-﻿/**
- * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
+/**
+ * @license Copyright (c) 2003-2017, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
 
@@ -116,10 +116,17 @@ CKEDITOR.dialog.add( 'checkbox', function( editor ) {
 						}
 					} else {
 						var value = this.getValue();
-						if ( value )
+						// Blink/Webkit needs to change checked property, not attribute. (#12465)
+						if ( CKEDITOR.env.webkit ) {
+							element.$.checked = value;
+						}
+
+						if ( value ) {
 							element.setAttribute( 'checked', 'checked' );
-						else
+						}
+						else {
 							element.removeAttribute( 'checked' );
+						}
 					}
 				}
 			},

@@ -1,9 +1,382 @@
-﻿/**
- * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
+/**
+ * @license Copyright (c) 2003-2017, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
 
 ( function() {
+	var isMSSelection = typeof window.getSelection != 'function',
+		nextRev = 1,
+		// #13816
+		fillingCharSequence = CKEDITOR.tools.repeat( '\u200b', 7 ),
+		fillingCharSequenceRegExp = new RegExp( fillingCharSequence + '( )?', 'g' ),
+		isSelectingTable;
+
+	// #### table selection : START
+	// @param {CKEDITOR.dom.range[]} ranges
+	// @param {Boolean} allowPartially Whether a collapsed selection within table is recognized to be a valid selection.
+	// This happens for WebKits on MacOS, when you right click inside the table.
+	function isTableSelection( ranges, allowPartially ) {
+		if ( ranges.length === 0 ) {
+			return false;
+		}
+
+		var node,
+			i;
+
+		function isPartiallySelected( range ) {
+			var startCell = range.startContainer.getAscendant( { td: 1, th: 1 }, true ),
+				endCell = range.endContainer.getAscendant( { td: 1, th: 1 }, true ),
+				trim = CKEDITOR.tools.trim,
+				selected;
+
+			// Check if the selection is inside one cell and we don't have any nested table contents selected.
+			if ( !startCell || !startCell.equals( endCell ) || startCell.findOne( 'td, th, tr, tbody, table' ) ) {
+				return false;
+			}
+
+			selected = range.cloneContents();
+
+			// Empty selection is still partially selected.
+			if ( !selected.getFirst() ) {
+				return true;
+			}
+
+			return trim( selected.getFirst().getText() ) !== trim( startCell.getText() );
+		}
+
+		// Edge case: partially selected text node inside one table cell or cursor inside cell.
+		if ( !allowPartially && ranges.length === 1 &&
+			( ranges[ 0 ].collapsed || isPartiallySelected( ranges[ 0 ] ) ) ) {
+			return false;
+		}
+
+		for ( i = 0; i < ranges.length; i++ ) {
+			node = ranges[ i ]._getTableElement();
+
+			if ( !node ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	// After performing fake table selection, the real selection is limited
+	// to the first selected cell. Therefore to check if the real selection
+	// matches the fake selection, we check if the table cell from fake selection's
+	// first range and real selection's range are the same.
+	// Also if the selection is collapsed, we should check if it's placed inside the table
+	// in which the fake selection is or inside nested table. Such selection occurs after right mouse click.
+	function isRealTableSelection( selection, fakeSelection ) {
+		var ranges = selection.getRanges(),
+			fakeRanges = fakeSelection.getRanges(),
+			table = ranges.length && ranges[ 0 ]._getTableElement() &&
+				ranges[ 0 ]._getTableElement().getAscendant( 'table', true ),
+			fakeTable = fakeRanges.length && fakeRanges[ 0 ]._getTableElement() &&
+				fakeRanges[ 0 ]._getTableElement().getAscendant( 'table', true ),
+			isTableRange = ranges.length === 1 && ranges[ 0 ]._getTableElement() &&
+					ranges[ 0 ]._getTableElement().is( 'table' ),
+			isFakeTableRange = fakeRanges.length === 1 && fakeRanges[ 0 ]._getTableElement() &&
+					fakeRanges[ 0 ]._getTableElement().is( 'table' );
+
+		function isValidTableSelection( table, fakeTable, ranges, fakeRanges ) {
+			var isMenuOpen = ranges.length === 1 && ranges[ 0 ].collapsed,
+				// In case of WebKit on MacOS, when checking real selection, we must allow selection to be partial.
+				// Otherwise the check will fail for table selection with opened context menu.
+				isInTable = isTableSelection( ranges, !!CKEDITOR.env.webkit ) && isTableSelection( fakeRanges );
+
+			return isSameTable( table, fakeTable ) && ( isMenuOpen || isInTable );
+		}
+
+		function isSameTable( table, fakeTable ) {
+			if ( !table || !fakeTable ) {
+				return false;
+			}
+
+			return table.equals( fakeTable ) || fakeTable.contains( table );
+		}
+
+		if ( isValidTableSelection( table, fakeTable, ranges, fakeRanges ) ) {
+			// Edge case: when editor contains only table and that table is selected using selectAll command,
+			// then the selection is not properly refreshed and it must be done manually.
+			if ( isTableRange && !isFakeTableRange ) {
+				fakeSelection.selectRanges( ranges );
+			}
+			return true;
+		}
+
+		return false;
+	}
+
+	function getSelectedCells( ranges ) {
+		var cells = [],
+			node,
+			i;
+
+		function getCellsFromElement( element ) {
+			var cells = element.find( 'td, th' ),
+				cellsArray = [],
+				i;
+
+			for ( i = 0; i < cells.count(); i++ ) {
+				cellsArray.push( cells.getItem( i ) );
+			}
+
+			return cellsArray;
+		}
+
+		for ( i = 0; i < ranges.length; i++ ) {
+			node = ranges[ i ]._getTableElement();
+
+			if ( node.is && node.is( { td: 1, th: 1 } ) ) {
+				cells.push( node );
+			} else {
+				cells = cells.concat( getCellsFromElement( node ) );
+			}
+		}
+
+		return cells;
+	}
+
+	// Cells in the same row are separated by tab and the rows are separated by new line, e.g.
+	// Cell 1.1	Cell 1.2
+	// Cell 2.1	Cell 2.2
+	function getTextFromSelectedCells( ranges ) {
+		var cells = getSelectedCells( ranges ),
+			txt = '',
+			currentRow = [],
+			lastRow,
+			i;
+
+		for ( i = 0; i < cells.length; i++ ) {
+			if ( lastRow && !lastRow.equals( cells[ i ].getAscendant( 'tr' ) ) ) {
+				txt += currentRow.join( '\t' ) + '\n';
+				lastRow = cells[ i ].getAscendant( 'tr' );
+				currentRow = [];
+			} else if ( i === 0 ) {
+				lastRow = cells[ i ].getAscendant( 'tr' );
+			}
+
+			currentRow.push( cells[ i ].getText() );
+		}
+
+		txt += currentRow.join( '\t' );
+
+		return txt;
+	}
+
+	function clearCellInRange( range ) {
+		if ( range.getEnclosedNode() ) {
+			return range.getEnclosedNode().setText( '' );
+		}
+
+		range.deleteContents();
+	}
+
+	function performFakeTableSelection( ranges ) {
+		var editor = this.root.editor,
+			realSelection = editor.getSelection( 1 ),
+			cache;
+
+		// Cleanup after previous selection - e.g. remove hidden sel container.
+		this.reset();
+
+		// Indicate that the table is being fake-selected to prevent infinite loop
+		// inside `selectRanges`.
+		isSelectingTable = true;
+
+		// Cancel selectionchange for the real selection.
+		realSelection.root.once( 'selectionchange', function( evt ) {
+			evt.cancel();
+		}, null, null, 0 );
+
+		// Move real selection to the first selected range.
+		realSelection.selectRanges( [ ranges[ 0 ] ] );
+
+		cache = this._.cache;
+
+		// Caches given ranges.
+		cache.ranges = new CKEDITOR.dom.rangeList( ranges );
+		cache.type = CKEDITOR.SELECTION_TEXT;
+		cache.selectedElement = ranges[ 0 ]._getTableElement();
+
+		// `selectedText` should contain text from all selected data ("plain text table")
+		// to be compatible with Firefox's implementation.
+		cache.selectedText = getTextFromSelectedCells( ranges );
+
+		// Properties that will not be available when isFake.
+		cache.nativeSel = null;
+
+		this.isFake = 1;
+		this.rev = nextRev++;
+
+		// Save this selection, so it can be returned by editor.getSelection().
+		editor._.fakeSelection = this;
+
+		isSelectingTable = false;
+
+		// Fire selectionchange, just like a normal selection.
+		this.root.fire( 'selectionchange' );
+	}
+
+	// Handle left, up, right, down, delete and backspace keystrokes inside table fake selection.
+	function getTableOnKeyDownListener( editor ) {
+		var keystrokes = {
+				37: 1, // Left Arrow
+				38: 1, // Up Arrow
+				39: 1, // Right Arrow,
+				40: 1, // Down Arrow
+				8: 1, // Backspace
+				46: 1 // Delete
+			},
+			tags = CKEDITOR.tools.extend( { table: 1 }, CKEDITOR.dtd.$tableContent );
+
+		delete tags.td;
+		delete tags.th;
+
+		// Called when removing empty subseleciton of the table.
+		// It should not allow for removing part of table, e.g. when user attempts to remove 2 cells
+		// out of 4 in row. It should however remove whole row or table, if it was fully selected.
+		function deleteEmptyTablePart( node, ranges ) {
+			if ( !ranges.length ) {
+				return null;
+			}
+
+			var rng = editor.createRange(),
+				mergedRanges = CKEDITOR.plugins.tabletools.mergeRanges( ranges );
+
+			// Enlarge each range, so that it wraps over tr.
+			CKEDITOR.tools.array.forEach( mergedRanges, function( mergedRange ) {
+				mergedRange.enlarge( CKEDITOR.ENLARGE_ELEMENT );
+			} );
+
+			var boundaryNodes = mergedRanges[ 0 ].getBoundaryNodes(),
+				startNode = boundaryNodes.startNode,
+				endNode = boundaryNodes.endNode;
+
+			if ( startNode && startNode.is && startNode.is( tags ) ) {
+				// A node that will receive selection after the firstRangeContainedNode is removed.
+				var boundaryTable = startNode.getAscendant( 'table', true ),
+					targetNode = startNode.getPreviousSourceNode( false, CKEDITOR.NODE_ELEMENT, boundaryTable ),
+					selectBeginning = false,
+					matchingElement = function( elem ) {
+						// We're interested in matching only td/th but not contained by the startNode since it will be removed.
+						// Technically none of startNode children should be visited but it will due to #12191.
+						return !startNode.contains( elem ) && elem.is && elem.is( 'td', 'th' );
+					};
+
+				while ( targetNode && !matchingElement( targetNode ) ) {
+					targetNode = targetNode.getPreviousSourceNode( false, CKEDITOR.NODE_ELEMENT, boundaryTable );
+				}
+
+				if ( !targetNode && !endNode.is( 'table' ) && endNode.getNext() ) {
+					// Special case: say we were removing the first row, so there are no more tds before, check if there's a cell after removed row.
+					targetNode = endNode.getNext().findOne( 'td, th' );
+					// In that particular case we want to select beginning.
+					selectBeginning = true;
+				}
+
+				if ( !targetNode ) {
+					// As a last resort of defence we'll put the selection before (about to be) removed table.
+					rng.setStartBefore( startNode.getAscendant( 'table', true ) );
+					rng.collapse( true );
+				} else {
+					rng[ 'moveToElementEdit' + ( selectBeginning ? 'Start' : 'End' ) ]( targetNode );
+				}
+
+				mergedRanges[ 0 ].deleteContents();
+
+				return [ rng ];
+			}
+
+			// By default return a collapsed selection in a first cell.
+			if ( startNode ) {
+				rng.moveToElementEditablePosition( startNode );
+				return [ rng ];
+			}
+		}
+
+		return function( evt ) {
+			// Use getKey directly in order to ignore modifiers.
+			// Justification: http://dev.ckeditor.com/ticket/11861#comment:13
+			var keystroke = evt.data.getKey(),
+				selection,
+				toStart = keystroke === 37 || keystroke == 38,
+				ranges,
+				firstCell,
+				lastCell,
+				i;
+
+			// Handle only left/right/del/bspace keys.
+			if ( !keystrokes[ keystroke ] ) {
+				return;
+			}
+
+			selection = editor.getSelection();
+
+			if ( !selection || !selection.isInTable() || !selection.isFake ) {
+				return;
+			}
+
+			ranges = selection.getRanges();
+			firstCell = ranges[ 0 ]._getTableElement();
+			lastCell = ranges[ ranges.length - 1 ]._getTableElement();
+
+			evt.data.preventDefault();
+			evt.cancel();
+
+			if ( keystroke > 8 && keystroke < 46 ) {
+				// Arrows.
+				ranges[ 0 ].moveToElementEditablePosition( toStart ? firstCell : lastCell, !toStart );
+				selection.selectRanges( [ ranges[ 0 ] ] );
+			} else {
+				// Delete.
+				for ( i = 0; i < ranges.length; i++ ) {
+					clearCellInRange( ranges[ i ] );
+				}
+
+				var newRanges = deleteEmptyTablePart( firstCell, ranges );
+
+				if ( newRanges ) {
+					ranges = newRanges;
+				} else {
+					// If no new range was returned fallback to selecting first cell.
+					ranges[ 0 ].moveToElementEditablePosition( firstCell );
+				}
+
+				selection.selectRanges( ranges );
+				editor.fire( 'saveSnapshot' );
+			}
+		};
+	}
+
+	function getTableOnKeyPressListener( editor ) {
+		return function( evt ) {
+			var selection = editor.getSelection(),
+				ranges,
+				firstCell,
+				i;
+
+			// We must check if the event really did not produce any character as it's fired for all keys in Gecko.
+			if ( !selection || !selection.isInTable() || !selection.isFake || !evt.data.$.charCode ||
+				evt.data.getKeystroke() & CKEDITOR.CTRL ) {
+				return;
+			}
+
+			ranges = selection.getRanges();
+			firstCell = ranges[ 0 ].getEnclosedNode().getAscendant( { td: 1, th: 1 }, true );
+
+			for ( i = 0; i < ranges.length; i++ ) {
+				clearCellInRange( ranges[ i ] );
+			}
+
+			ranges[ 0 ].moveToElementEditablePosition( firstCell );
+			selection.selectRanges( [ ranges[ 0 ] ] );
+		};
+	}
+
+	// #### table selection : END
+
 	// #### checkSelectionChange : START
 
 	// The selection change check basically saves the element parent tree of
@@ -16,10 +389,10 @@
 
 		if ( sel ) {
 			realSel = this.getSelection( 1 );
-
-			// If real (not locked/stored) selection was moved from hidden container,
-			// then the fake-selection must be invalidated.
-			if ( !realSel || !realSel.isHidden() ) {
+			//realSel && console.log( realSel.getRanges()[ 0] , isRealTableSelection( realSel.getRanges(), sel.getRanges() ) );
+			// If real (not locked/stored) selection was moved from hidden container
+			// or is not a table one, then the fake-selection must be invalidated.
+			if ( !realSel || ( !realSel.isHidden() && !isRealTableSelection( realSel, sel ) ) ) {
 				// Remove the cache from fake-selection references in use elsewhere.
 				sel.reset();
 
@@ -41,8 +414,10 @@
 
 		var currentPath = this.elementPath();
 		if ( !currentPath.compare( this._.selectionPreviousPath ) ) {
+			// Handle case when dialog inserts new element but parent block and path (so also focus context) does not change. (#13362)
+			var sameBlockParent = this._.selectionPreviousPath && this._.selectionPreviousPath.blockLimit.equals( currentPath.blockLimit );
 			// Cache the active element, which we'll eventually lose on Webkit.
-			if ( CKEDITOR.env.webkit )
+			if ( CKEDITOR.env.webkit && !sameBlockParent )
 				this._.previousActive = this.document.getActive();
 
 			this._.selectionPreviousPath = currentPath;
@@ -138,72 +513,82 @@
 		return false;
 	}
 
-	function createFillingChar( element ) {
-		removeFillingChar( element, false );
+	function createFillingCharSequenceNode( editable ) {
+		removeFillingCharSequenceNode( editable, false );
 
-		var fillingChar = element.getDocument().createText( '\u200B' );
-		element.setCustomData( 'cke-fillingChar', fillingChar );
+		var fillingChar = editable.getDocument().createText( fillingCharSequence );
+		editable.setCustomData( 'cke-fillingChar', fillingChar );
 
 		return fillingChar;
 	}
 
-	function getFillingChar( element ) {
-		return element.getCustomData( 'cke-fillingChar' );
-	}
-
 	// Checks if a filling char has been used, eventualy removing it (#1272).
-	function checkFillingChar( element ) {
-		var fillingChar = getFillingChar( element );
+	function checkFillingCharSequenceNodeReady( editable ) {
+		var fillingChar = editable.getCustomData( 'cke-fillingChar' );
+
 		if ( fillingChar ) {
 			// Use this flag to avoid removing the filling char right after
 			// creating it.
-			if ( fillingChar.getCustomData( 'ready' ) )
-				removeFillingChar( element );
-			else
+			if ( fillingChar.getCustomData( 'ready' ) ) {
+				removeFillingCharSequenceNode( editable );
+				editable.editor.fire( 'selectionCheck' );
+			} else {
 				fillingChar.setCustomData( 'ready', 1 );
+			}
 		}
 	}
 
-	function removeFillingChar( element, keepSelection ) {
-		var fillingChar = element && element.removeCustomData( 'cke-fillingChar' );
-		if ( fillingChar ) {
+	function removeFillingCharSequenceNode( editable, keepSelection ) {
+		var fillingChar = editable && editable.removeCustomData( 'cke-fillingChar' );
 
+		if ( fillingChar ) {
 			// Text selection position might get mangled by
 			// subsequent dom modification, save it now for restoring. (#8617)
 			if ( keepSelection !== false ) {
-				var bm,
-					sel = element.getDocument().getSelection().getNative(),
+				var sel = editable.getDocument().getSelection().getNative(),
 					// Be error proof.
-					range = sel && sel.type != 'None' && sel.getRangeAt( 0 );
+					range = sel && sel.type != 'None' && sel.getRangeAt( 0 ),
+					fillingCharSeqLength = fillingCharSequence.length;
 
-				if ( fillingChar.getLength() > 1 && range && range.intersectsNode( fillingChar.$ ) ) {
-					bm = createNativeSelectionBookmark( sel );
+				// If there's some text other than the sequence in the FC text node and the range
+				// intersects with that node...
+				if ( fillingChar.getLength() > fillingCharSeqLength && range && range.intersectsNode( fillingChar.$ ) ) {
+					var bm = createNativeSelectionBookmark( sel );
 
-					// Anticipate the offset change brought by the removed char.
-					var startAffected = sel.anchorNode == fillingChar.$ && sel.anchorOffset > 0,
-						endAffected = sel.focusNode == fillingChar.$ && sel.focusOffset > 0;
-					startAffected && bm[ 0 ].offset--;
-					endAffected && bm[ 1 ].offset--;
+					// Correct start offset anticipating the removal of FC.
+					if ( sel.anchorNode == fillingChar.$ && sel.anchorOffset > fillingCharSeqLength ) {
+						bm[ 0 ].offset -= fillingCharSeqLength;
+					}
+
+					// Correct end offset anticipating the removal of FC.
+					if ( sel.focusNode == fillingChar.$ && sel.focusOffset > fillingCharSeqLength ) {
+						bm[ 1 ].offset -= fillingCharSeqLength;
+					}
 				}
 			}
 
 			// We can't simply remove the filling node because the user
 			// will actually enlarge it when typing, so we just remove the
 			// invisible char from it.
-			fillingChar.setText( replaceFillingChar( fillingChar.getText() ) );
+			fillingChar.setText( removeFillingCharSequenceString( fillingChar.getText(), 1 ) );
 
 			// Restore the bookmark preserving selection's direction.
 			if ( bm ) {
-				moveNativeSelectionToBookmark( element.getDocument().$, bm );
+				moveNativeSelectionToBookmark( editable.getDocument().$, bm );
 			}
 		}
 	}
 
-	function replaceFillingChar( html ) {
-		return html.replace( /\u200B( )?/g, function( match ) {
-			// #10291 if filling char is followed by a space replace it with nbsp.
-			return match[ 1 ] ? '\xa0' : '';
-		} );
+	// #13816
+	function removeFillingCharSequenceString( str, nbspAware ) {
+		if ( nbspAware ) {
+			return str.replace( fillingCharSequenceRegExp, function( m, p ) {
+				// #10291 if filling char is followed by a space replace it with NBSP.
+				return p ? '\xa0' : '';
+			} );
+		} else {
+			return str.replace( fillingCharSequence, '' );
+		}
 	}
 
 	function createNativeSelectionBookmark( sel ) {
@@ -225,10 +610,11 @@
 	}
 
 	// Creates cke_hidden_sel container and puts real selection there.
-	function hideSelection( editor ) {
-		var style = CKEDITOR.env.ie ? 'display:none' : 'position:fixed;top:0;left:-1000px',
+	function hideSelection( editor, ariaLabel ) {
+		var content = ariaLabel || '&nbsp;',
+			style = CKEDITOR.env.ie && CKEDITOR.env.version < 14 ? 'display:none' : 'position:fixed;top:0;left:-1000px',
 			hiddenEl = CKEDITOR.dom.element.createFromHtml(
-				'<div data-cke-hidden-sel="1" data-cke-temp="1" style="' + style + '">&nbsp;</div>',
+				'<div data-cke-hidden-sel="1" data-cke-temp="1" style="' + style + '">' + content + '</div>',
 				editor.document );
 
 		editor.fire( 'lockSnapshot' );
@@ -530,8 +916,16 @@
 				// On Webkit we use DOMFocusIn which is fired more often than focus - e.g. when moving from main editable
 				// to nested editable (or the opposite). Unlock selection all, but restore only when it was locked
 				// for the same active element, what will e.g. mean restoring after displaying dialog.
-				if ( restoreSel && CKEDITOR.env.webkit )
+				if ( restoreSel && CKEDITOR.env.webkit ) {
 					restoreSel = editor._.previousActive && editor._.previousActive.equals( doc.getActive() );
+
+					// On Webkit when editor uses divarea, native focus causes editable viewport to scroll
+					// to the top (when there is no active selection inside while focusing) so the scroll
+					// position should be restored after focusing back editable area. (#14659)
+					if ( restoreSel && editor._.previousScrollTop != null && editor._.previousScrollTop != editable.$.scrollTop ) {
+						editable.$.scrollTop = editor._.previousScrollTop;
+					}
+				}
 
 				editor.unlockSelection( restoreSel );
 				restoreSel = 0;
@@ -601,6 +995,9 @@
 				// the normal behavior on old IEs. (#1659, #7932)
 				if ( doc.$.compatMode != 'BackCompat' ) {
 					if ( CKEDITOR.env.ie7Compat || CKEDITOR.env.ie6Compat ) {
+						var textRng,
+							startRng;
+
 						html.on( 'mousedown', function( evt ) {
 							evt = evt.data;
 
@@ -643,11 +1040,11 @@
 									evt.$.y < html.$.clientHeight &&
 									evt.$.x < html.$.clientWidth ) {
 								// Start to build the text range.
-								var textRng = body.$.createTextRange();
+								textRng = body.$.createTextRange();
 								moveRangeToPoint( textRng, evt.$.clientX, evt.$.clientY );
 
 								// Records the dragging start of the above text range.
-								var startRng = textRng.duplicate();
+								startRng = textRng.duplicate();
 
 								html.on( 'mousemove', onHover );
 								outerDoc.on( 'mouseup', onSelectEnd );
@@ -675,6 +1072,14 @@
 			// 2. After the accomplish of keyboard and mouse events.
 			editable.attachListener( editable, 'selectionchange', checkSelectionChange, editor );
 			editable.attachListener( editable, 'keyup', checkSelectionChangeTimeout, editor );
+			// #14407 - Don't even let anything happen if the selection is in a non-editable element.
+			editable.attachListener( editable, 'keydown', function( evt ) {
+				var sel = this.getSelection( 1 );
+				if ( nonEditableAscendant( sel ) ) {
+					sel.selectElement( nonEditableAscendant( sel ) );
+					evt.data.preventDefault();
+				}
+			}, editor );
 			// Always fire the selection change on focus gain.
 			// On Webkit do this on DOMFocusIn, because the selection is unlocked on it too and
 			// we need synchronization between those listeners to not lost cached editor._.previousActive property
@@ -724,7 +1129,9 @@
 						case 8: // BACKSPACE
 						case 45: // INS
 						case 46: // DEl
-							removeFillingChar( editable );
+							if ( editable.hasFocus ) {
+								removeFillingCharSequenceNode( editable );
+							}
 					}
 
 				}, null, null, -1 );
@@ -732,6 +1139,11 @@
 
 			// Automatically select non-editable element when navigating into
 			// it by left/right or backspace/del keys.
+			if ( editor.config.tableImprovements ) {
+				editable.attachListener( editable, 'keydown', getTableOnKeyDownListener( editor ), null, null, -1 );
+				editable.attachListener( editable, 'keypress', getTableOnKeyPressListener( editor ), null, null, -1 );
+			}
+
 			editable.attachListener( editable, 'keydown', getOnKeyDownListener( editor ), null, null, -1 );
 
 			function moveRangeToPoint( range, x, y ) {
@@ -758,6 +1170,18 @@
 				// The selection range is reported on host, but actually it should applies to the content doc.
 				if ( sel.type != 'None' && range.parentElement().ownerDocument == doc.$ )
 					range.select();
+			}
+
+			function nonEditableAscendant( sel ) {
+				if ( CKEDITOR.env.ie ) {
+					var range = sel.getRanges()[ 0 ],
+						ascendant = range ? range.startContainer.getAscendant( function( parent ) {
+								return parent.type == CKEDITOR.NODE_ELEMENT &&
+									( parent.getAttribute( 'contenteditable' ) == 'false' || parent.getAttribute( 'contenteditable' ) == 'true' );
+							}, true ) : null ;
+
+					return range && ascendant.getAttribute( 'contenteditable' ) == 'false' && ascendant;
+				}
 			}
 		} );
 
@@ -839,65 +1263,39 @@
 		}
 	} );
 
-	CKEDITOR.on( 'instanceReady', function( evt ) {
-		var editor = evt.editor,
-			fillingCharBefore,
-			selectionBookmark;
+	// On WebKit only, we need a special "filling" char on some situations
+	// (#1272). Here we set the events that should invalidate that char.
+	if ( CKEDITOR.env.webkit ) {
+		CKEDITOR.on( 'instanceReady', function( evt ) {
+			var editor = evt.editor;
 
-		// On WebKit only, we need a special "filling" char on some situations
-		// (#1272). Here we set the events that should invalidate that char.
-		if ( CKEDITOR.env.webkit ) {
 			editor.on( 'selectionChange', function() {
-				checkFillingChar( editor.editable() );
+				checkFillingCharSequenceNodeReady( editor.editable() );
 			}, null, null, -1 );
+
 			editor.on( 'beforeSetMode', function() {
-				removeFillingChar( editor.editable() );
+				removeFillingCharSequenceNode( editor.editable() );
 			}, null, null, -1 );
 
-			editor.on( 'beforeUndoImage', beforeData );
-			editor.on( 'afterUndoImage', afterData );
-			editor.on( 'beforeGetData', beforeData, null, null, 0 );
-			editor.on( 'getData', afterData );
-		}
-
-		function beforeData() {
-			var editable = editor.editable();
-			if ( !editable )
-				return;
-
-			var fillingChar = getFillingChar( editable );
-
-			if ( fillingChar ) {
-				// If the selection's focus or anchor is located in the filling char's text node,
-				// we need to restore the selection in afterData, because it will be lost
-				// when setting text. Selection's direction must be preserved.
-				// (#7437, #12489, #12491 comment:3)
-				var sel = editor.document.$.getSelection();
-				if ( sel.type != 'None' && ( sel.anchorNode == fillingChar.$ || sel.focusNode == fillingChar.$ ) )
-					selectionBookmark = createNativeSelectionBookmark( sel );
-
-				fillingCharBefore = fillingChar.getText();
-				fillingChar.setText( replaceFillingChar( fillingCharBefore ) );
-			}
-		}
-
-		function afterData() {
-			var editable = editor.editable();
-			if ( !editable )
-				return;
-
-			var fillingChar = getFillingChar( editable );
-
-			if ( fillingChar ) {
-				fillingChar.setText( fillingCharBefore );
-
-				if ( selectionBookmark ) {
-					moveNativeSelectionToBookmark( editor.document.$, selectionBookmark );
-					selectionBookmark = null;
+			// Filter Undo snapshot's HTML to get rid of Filling Char Sequence.
+			// Note: CKEDITOR.dom.range.createBookmark2() normalizes snapshot's
+			// bookmarks to anticipate the removal of FCSeq from the snapshot's HTML (#13816).
+			editor.on( 'getSnapshot', function( evt ) {
+				if ( evt.data ) {
+					evt.data = removeFillingCharSequenceString( evt.data );
 				}
-			}
-		}
-	} );
+			}, editor, null, 20 );
+
+			// Filter data to get rid of Filling Char Sequence. Filter on #toDataFormat
+			// instead of #getData because once removed, FCSeq may leave an empty element,
+			// which should be pruned by the dataProcessor (#13816).
+			// Note: Used low priority to filter when dataProcessor works on strings,
+			// not pseudo–DOM.
+			editor.on( 'toDataFormat', function( evt ) {
+				evt.data.dataValue = removeFillingCharSequenceString( evt.data.dataValue );
+			}, null, null, 0 );
+		} );
+	}
 
 	/**
 	 * Check the selection change in editor and potentially fires
@@ -1056,9 +1454,6 @@
 	 */
 	CKEDITOR.SELECTION_ELEMENT = 3;
 
-	var isMSSelection = typeof window.getSelection != 'function',
-		nextRev = 1;
-
 	/**
 	 * Manipulates the selection within a DOM element. If the current browser selection
 	 * spans outside of the element, an empty selection object is returned.
@@ -1158,6 +1553,21 @@
 
 	var styleObjectElements = { img: 1, hr: 1, li: 1, table: 1, tr: 1, td: 1, th: 1, embed: 1, object: 1, ol: 1, ul: 1,
 			a: 1, input: 1, form: 1, select: 1, textarea: 1, button: 1, fieldset: 1, thead: 1, tfoot: 1 };
+
+	CKEDITOR.tools.extend( CKEDITOR.dom.selection, {
+		_removeFillingCharSequenceString: removeFillingCharSequenceString,
+		_createFillingCharSequenceNode: createFillingCharSequenceNode,
+
+		/**
+		 * The sequence used in a WebKit-based browser to create a Filling Character. By default it is
+		 * a string of 7 zero-width space characters (U+200B).
+		 *
+		 * @since 4.5.7
+		 * @readonly
+		 * @property {String}
+		 */
+		FILLING_CHAR_SEQUENCE: fillingCharSequence
+	} );
 
 	CKEDITOR.dom.selection.prototype = {
 		/**
@@ -1543,7 +1953,7 @@
 		 *		var element = editor.getSelection().getSelectedElement();
 		 *		alert( element.getName() );
 		 *
-		 * @returns {CKEDITOR.dom.element} The selected element. Null if no
+		 * @returns {CKEDITOR.dom.element/null} The selected element. `null` if no
 		 * selection is available or the selection type is not {@link CKEDITOR#SELECTION_ELEMENT}.
 		 */
 		getSelectedElement: function() {
@@ -1626,7 +2036,7 @@
 
 			if ( restore ) {
 				var selectedElement = this.getSelectedElement(),
-					ranges = !selectedElement && this.getRanges(),
+					ranges = this.getRanges(),
 					faked = this.isFake;
 			}
 
@@ -1640,7 +2050,10 @@
 				if ( !( common && common.getAscendant( 'body', 1 ) ) )
 					return;
 
-				if ( faked )
+				if ( isTableSelection( ranges ) ) {
+					// Tables have it's own selection method.
+					performFakeTableSelection.call( this, ranges );
+				} else if ( faked )
 					this.fake( selectedElement );
 				else if ( selectedElement )
 					this.selectElement( selectedElement );
@@ -1669,11 +2082,9 @@
 
 					removeHiddenSelectionContainer( editor );
 				}
-				// jshint ignore:start
-				else { // %REMOVE_LINE%
-					window.console && console.log( '[CKEDITOR.dom.selection.reset] Wrong selection instance resets fake selection.' ); // %REMOVE_LINE%
-				} // %REMOVE_LINE%
-				// jshint ignore:end
+				else {
+					CKEDITOR.warn( 'selection-fake-reset' );
+				}
 			}
 
 			this.rev = nextRev++;
@@ -1739,6 +2150,12 @@
 
 			if ( receiver ) {
 				this.fake( receiver );
+				return;
+			}
+
+			// Handle special case - fake selection of table cells.
+			if ( editor && editor.config.tableImprovements && isTableSelection( ranges ) && !isSelectingTable ) {
+				performFakeTableSelection.call( this, ranges );
 				return;
 			}
 
@@ -1901,7 +2318,7 @@
 					if ( range.collapsed && CKEDITOR.env.webkit && rangeRequiresFix( range ) ) {
 						// Append a zero-width space so WebKit will not try to
 						// move the selection by itself (#1272).
-						var fillingChar = createFillingChar( this.root );
+						var fillingChar = createFillingCharSequenceNode( this.root );
 						range.insertNode( fillingChar );
 
 						next = fillingChar.getNext();
@@ -1910,7 +2327,7 @@
 						// having something before it, it'll not blink.
 						// Let's remove it in this case.
 						if ( next && !fillingChar.getPrevious() && next.type == CKEDITOR.NODE_ELEMENT && next.getName() == 'br' ) {
-							removeFillingChar( this.root );
+							removeFillingCharSequenceNode( this.root );
 							range.moveToPosition( next, CKEDITOR.POSITION_BEFORE_START );
 						} else {
 							range.moveToPosition( fillingChar, CKEDITOR.POSITION_AFTER_END );
@@ -1954,14 +2371,20 @@
 		 * displayed to the user.
 		 *
 		 * @param {CKEDITOR.dom.element} element The element to be "selected".
+		 * @param {String} [ariaLabel] A string to be used by the screen reader to describe the selection.
 		 */
-		fake: function( element ) {
+		fake: function( element, ariaLabel ) {
 			var editor = this.root.editor;
+
+			// Attempt to retreive aria-label if possible (#14539).
+			if ( ariaLabel === undefined && element.hasAttribute( 'aria-label' ) ) {
+				ariaLabel = element.getAttribute( 'aria-label' );
+			}
 
 			// Cleanup after previous selection - e.g. remove hidden sel container.
 			this.reset();
 
-			hideSelection( editor );
+			hideSelection( editor, ariaLabel );
 
 			// Set this value after executing hiseSelection, because it may
 			// cause reset() which overwrites cache.
@@ -2009,6 +2432,20 @@
 				el = el.getParent();
 
 			return !!( el && el.data( 'cke-hidden-sel' ) );
+		},
+
+		/**
+		 * Checks if the selection contains an HTML element inside a table.
+		 * Returns `false` for text selection inside a table (e.g. it will return `false`
+		 * for text selected in one cell).
+		 *
+		 *		editor.getSelection().isInTable();
+		 *
+		 * @since
+		 * @returns {Boolean}
+		 */
+		isInTable: function() {
+			return isTableSelection( this.getRanges() );
 		},
 
 		/**
@@ -2064,19 +2501,19 @@
 
 			// It may happen that the content change during loading, before selection is set so bookmark leads to text node.
 			if ( bookmarks.isFake ) {
-				node = ranges[ 0 ].getEnclosedNode();
+				node = isTableSelection( ranges ) ? ranges[ 0 ]._getTableElement() : ranges[ 0 ].getEnclosedNode();
+
 				if ( !node || node.type != CKEDITOR.NODE_ELEMENT ) {
-					// %REMOVE_START%
-					window.console && console.log( '[CKEDITOR.dom.selection.selectBookmarks] Selection is no longer fake.' ); // jshint ignore:line
-					// %REMOVE_END%
+					CKEDITOR.warn( 'selection-not-fake' );
 					bookmarks.isFake = 0;
 				}
 			}
 
-			if ( bookmarks.isFake )
+			if ( bookmarks.isFake && !isTableSelection( ranges ) ) {
 				this.fake( node );
-			else
+			} else {
 				this.selectRanges( ranges );
+			}
 
 			return this;
 		},

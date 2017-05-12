@@ -6,7 +6,8 @@
 
 	bender.editor = {
 		config: {
-			autoParagraph: false
+			autoParagraph: false,
+			extraAllowedContent: 'span[style]'
 		}
 	};
 
@@ -162,6 +163,194 @@
 			} );
 		},
 
+		'test edit selected text': function() {
+			var bot = this.editorBot,
+				expected = 'aa <a href="http://ckeditor.com">[foo]</a> cc';
+
+			bot.setHtmlWithSelection( 'aa [bb] cc' );
+
+			bot.dialog( 'link', function( dialog ) {
+				var displayTextInput = dialog.getContentElement( 'info', 'linkDisplayText' );
+				dialog.setValueOf( 'info', 'url', 'http://ckeditor.com' );
+
+				assert.isTrue( displayTextInput.isVisible(), 'Display text input visibility' );
+				assert.areSame( dialog.getValueOf( 'info', 'linkDisplayText' ), 'bb' );
+
+				dialog.setValueOf( 'info', 'linkDisplayText', 'foo' );
+				dialog.getButton( 'ok' ).click();
+				assert.areSame( expected, bender.tools.getHtmlWithSelection( bot.editor ) );
+			} );
+		},
+
+		'test edit existing link': function() {
+			var bot = this.editorBot,
+				expected = '[<a href="http://ckeditor.com">testing 1, 2, 3</a>]';
+
+			if ( CKEDITOR.env.safari || ( CKEDITOR.env.ie && CKEDITOR.env.version == 8 ) ) {
+				expected = '<a href="http://ckeditor.com">[testing 1, 2, 3]</a>';
+			}
+
+			bot.setHtmlWithSelection( '[<a href="http://ckeditor.com">http://ckeditor.com</a>]' );
+
+			bot.dialog( 'link', function( dialog ) {
+				assert.areSame( dialog.getValueOf( 'info', 'linkDisplayText' ), 'http://ckeditor.com' );
+				dialog.setValueOf( 'info', 'linkDisplayText', 'testing 1, 2, 3' );
+				dialog.getButton( 'ok' ).click();
+				assert.areSame( expected, bender.tools.getHtmlWithSelection( bot.editor ) );
+			} );
+		},
+
+		'test changing inner text': function() {
+			// Once the innertext (display text) is changed, any markup within the selection should be removed, and it should add
+			// an anchor element with innertext at the beginning of initial selection.
+			var bot = this.editorBot;
+
+			bot.setHtmlWithSelection( '<p>[testing <a href="http://ckeditor.com">http://ckeditor.<strong>com</strong></a>].</p>' );
+
+			bot.dialog( 'link', function( dialog ) {
+				assert.areSame( dialog.getValueOf( 'info', 'linkDisplayText' ), 'testing http://ckeditor.com' );
+				dialog.setValueOf( 'info', 'linkDisplayText', 'foobar' );
+				dialog.setValueOf( 'info', 'url', 'http://example.dev' );
+				dialog.getButton( 'ok' ).click();
+				assert.areSame( '<p><a href="http://example.dev">foobar</a>.</p>', bot.getData( true ) );
+			} );
+		},
+
+		'test XSS protection': function() {
+			var bot = this.editorBot,
+				expected = '<a href="http://ckeditor.com">&lt;img src="" onerror="alert( 1 );"&gt;</a>';
+
+			if ( this.editor.plugins.entities ) {
+				// If entities plugin is present (e.g. built version) also quotes will be encoded.
+				expected = '<a href="http://ckeditor.com">&lt;img src=&quot;&quot; onerror=&quot;alert( 1 );&quot;&gt;</a>';
+			}
+
+			bot.setHtmlWithSelection( '<a href="http://ckeditor.com">a^aa</a>' );
+
+			bot.dialog( 'link', function( dialog ) {
+				dialog.setValueOf( 'info', 'linkDisplayText', '<img src="" onerror="alert( 1 );">' );
+				dialog.getButton( 'ok' ).click();
+				assert.areSame( expected, bot.getData( true ) );
+			} );
+		},
+
+		'test overriding whole block': function() {
+			// If we have whole block selected, we need to make sure that by overriding the selection with new anchor it
+			// will be wrapped with a block instead of be put directly into editable (body).
+			var bot = this.editorBot;
+
+			bot.setHtmlWithSelection( '[<p>aaa</p>]' );
+
+			bot.dialog( 'link', function( dialog ) {
+				dialog.setValueOf( 'info', 'linkDisplayText', 'bbb' );
+				dialog.setValueOf( 'info', 'url', 'http://ckeditor.com' );
+				dialog.getButton( 'ok' ).click();
+				assert.areSame( '<p><a href="http://ckeditor.com">bbb</a></p>', bot.getData( true ) );
+			} );
+		},
+
+		'test link with a nested strong without text change': function() {
+			// If no innertext was changed, the nested elements should not get removed.
+			var bot = this.editorBot;
+
+			bot.setHtmlWithSelection( '[<a href="http://ckeditor.com">http://ckeditor.<strong>com</strong></a>].' );
+
+			bot.dialog( 'link', function( dialog ) {
+				assert.areSame( dialog.getValueOf( 'info', 'linkDisplayText' ), 'http://ckeditor.com' );
+				dialog.setValueOf( 'info', 'url', 'http://example.dev' );
+				dialog.getButton( 'ok' ).click();
+				assert.areSame( '<a href="http://example.dev">http://ckeditor.<strong>com</strong></a>.', bot.getData( true ) );
+			} );
+		},
+
+		'test changing inner text of link with same href and inner text': function() {
+			var bot = this.editorBot;
+
+			// Note it's crucial to include data-cke-saved-href attribute to reproduce this issue.
+			bot.setHtmlWithSelection( '<p>aa [<a href="http://foobar" data-cke-saved-href="http://foobar">http://foobar</a>] bb</p>' );
+
+			bot.dialog( 'link', function( dialog ) {
+				dialog.setValueOf( 'info', 'linkDisplayText', 'foo' );
+				dialog.getButton( 'ok' ).click();
+				assert.areSame( '<p>aa <a href="http://foobar">foo</a> bb</p>', bot.getData( true ) );
+			} );
+		},
+
+		'test link with a nested anchors without text change': function() {
+
+			if ( CKEDITOR.env.ie && CKEDITOR.env.version == 8 ) {
+				// #14848
+				assert.ignore();
+			}
+
+			// Even though display text was not changed we have to remove nested, editable anchor elements.
+			var bot = this.editorBot;
+
+			bot.setHtmlWithSelection( '[<em>foo </em><a href="aaa">bbb</a> <span contenteditable="false"><a href="aaa">ccc</a></span>]' );
+
+			bot.dialog( 'link', function( dialog ) {
+				dialog.setValueOf( 'info', 'url', 'newlink' );
+				dialog.getButton( 'ok' ).click();
+				assert.areSame( '<a href="http://newlink"><em>foo </em>bbb <span contenteditable="false"><a href="aaa">ccc</a></span></a>', bot.getData( true ) );
+			} );
+		},
+
+		'test link with a nested strong with text change': function() {
+			var bot = this.editorBot;
+
+			bot.setHtmlWithSelection( '[<a href="http://ckeditor.com">http://ckeditor.<strong>com</strong></a>].' );
+
+			bot.dialog( 'link', function( dialog ) {
+				dialog.setValueOf( 'info', 'linkDisplayText', 'foo' );
+				dialog.setValueOf( 'info', 'url', 'http://example.dev' );
+				dialog.getButton( 'ok' ).click();
+				assert.areSame( '<a href="http://example.dev">foo</a>.', bot.getData( true ) );
+			} );
+		},
+
+		'test changing inner text multiline': function() {
+			var bot = this.editorBot;
+
+			bot.setHtmlWithSelection( '<p>a[a</p><p>bb</p><p>c]c</p>' );
+
+			bot.dialog( 'link', function( dialog ) {
+				assert.areSame( dialog.getValueOf( 'info', 'linkDisplayText' ), 'abbc' );
+				dialog.setValueOf( 'info', 'linkDisplayText', 'foo' );
+				dialog.setValueOf( 'info', 'url', 'http://bar' );
+				dialog.getButton( 'ok' ).click();
+				assert.areSame( '<p>a<a href="http://bar">foo</a>c</p>', bot.getData( true ) );
+			} );
+		},
+
+		'test multiline selection without changing display text': function() {
+			var bot = this.editorBot;
+
+			// When using getSelectedText() on multiline selection, it will contain new line chars. Text inputs used in dialog, can't contain
+			// new lines, so if our initial pattern would use text with new lines, those would always differ.
+
+			bot.setHtmlWithSelection( '<p>fo[o</p><h2>b]ar</h2>' );
+			bot.dialog( 'link', function( dialog ) {
+				dialog.setValueOf( 'info', 'url', 'aaa' );
+				dialog.getButton( 'ok' ).click();
+
+				assert.areSame( '<p>fo<a href="http://aaa">o</a></p><h2><a href="http://aaa">b</a>ar</h2>', bot.getData( true ) );
+			} );
+		},
+
+		'test changing inner text block containing': function() {
+			var bot = this.editorBot;
+
+			bot.setHtmlWithSelection( '<p>a[a</p><p>bb]</p><p>cc</p>' );
+
+			bot.dialog( 'link', function( dialog ) {
+				assert.areSame( dialog.getValueOf( 'info', 'linkDisplayText' ), 'abb' );
+				dialog.setValueOf( 'info', 'linkDisplayText', 'foo' );
+				dialog.setValueOf( 'info', 'url', 'http://bar' );
+				dialog.getButton( 'ok' ).click();
+				assert.areSame( '<p>a<a href="http://bar">foo</a></p><p>cc</p>', bot.getData( true ) );
+			} );
+		},
+
 		'test link passes filter': function() {
 			this.editorBot.assertInputOutput(
 				'<p><a href="http://ckeditor.com">text</a></p>',
@@ -229,6 +418,134 @@
 				// selection is <a>[b]</a> or [<a>b</a>].
 				assert.areSame( 'b', editor.getSelection().getSelectedText(), 'Link selected' );
 			} );
+		},
+
+		// #11956
+		'test select link with descendants on double-click': function() {
+			var bot = this.editorBot,
+				editor = bot.editor;
+
+			// Do not let dialog to show – it is not necessary.
+			editor.once( 'doubleclick', function( evt ) {
+				evt.cancel();
+
+				resume( function() {
+					assert.areSame( editor.document.findOne( 'a' ), evt.data.link, 'Link selected' );
+				} );
+			} );
+
+			bot.setData( '<p>a<a href="http://bar"><span style="background:#f00;">b</span></a>c</p>', function() {
+				editor.fire( 'doubleclick', {
+					element: editor.document.findOne( 'span' )
+				} );
+
+				wait();
+			} );
+		},
+
+		// #13887
+		'test link target special chars': function() {
+			var bot = this.editorBot;
+
+			bot.setHtmlWithSelection( '<a href="http://ckeditor.com">[foo]</a>' );
+
+			bot.dialog( 'link', function( dialog ) {
+				var funnyTargetValue = 'foo-b!ar^$`*(';
+
+				dialog.setValueOf( 'target', 'linkTargetType', 'frame' );
+				dialog.setValueOf( 'target', 'linkTargetName', funnyTargetValue );
+
+				dialog.getButton( 'ok' ).click();
+
+				assert.areSame( '<a href="http://ckeditor.com" target="' + funnyTargetValue + '">foo</a>', bot.getData( true ) );
+			} );
+		},
+
+		'test link target keywords': function() {
+			var bot = this.editorBot;
+
+			bot.setHtmlWithSelection( '<a href="http://ckeditor.com">[foo]</a>' );
+
+			bot.dialog( 'link', function( dialog ) {
+				dialog.setValueOf( 'target', 'linkTargetType', 'frame' );
+				dialog.setValueOf( 'target', 'linkTargetName', '_self' );
+
+				dialog.getButton( 'ok' ).click();
+
+				assert.areSame( '<a href="http://ckeditor.com" target="_self">foo</a>', bot.getData( true ) );
+			} );
+		},
+
+		// #5278
+		'test link target with space': function() {
+			var bot = this.editorBot;
+
+			bot.setHtmlWithSelection( '<a href="http://ckeditor.com">[foo]</a>' );
+
+			bot.dialog( 'link', function( dialog ) {
+				var funnyTargetValue = ' foo bar';
+
+				dialog.setValueOf( 'target', 'linkTargetType', 'frame' );
+				dialog.setValueOf( 'target', 'linkTargetName', funnyTargetValue );
+
+				dialog.getButton( 'ok' ).click();
+
+				assert.areSame( '<a href="http://ckeditor.com" target="foobar">foo</a>', bot.getData( true ) );
+			} );
+		},
+
+		'test CKEDITOR.link.showDisplayTextForElement': function() {
+			var doc = CKEDITOR.document,
+				showDisplayTextForElement = CKEDITOR.plugins.link.showDisplayTextForElement;
+
+			assert.isFalse( showDisplayTextForElement( doc.findOne( 'input#blurTarget' ), this.editor ), 'Input element' );
+			assert.isTrue( showDisplayTextForElement( doc.findOne( 'span' ), this.editor ), 'Span element' );
+			assert.isTrue( showDisplayTextForElement( null, this.editor ), 'Null value' );
+		},
+
+		// #13062
+		'test unlink when cursor is right before the link': function() {
+			var editor = this.editor,
+				bot = this.editorBot;
+
+			bot.setHtmlWithSelection( '<p><a href="http://cksource.com">^Link</a></p>' );
+
+			editor.ui.get( 'Unlink' ).click( editor );
+
+			assert.areSame( '<p>^Link</p>', bot.htmlWithSelection() );
+		},
+
+		// #13062
+		'test unlink when cursor is right after the link': function() {
+			// IE8 fails this test for unknown reason; however it does well
+			// in the manual one.
+			if ( CKEDITOR.env.ie && CKEDITOR.env.version == 8 ) {
+				assert.ignore();
+			}
+
+			var editor = this.editor,
+				bot = this.editorBot;
+
+			bot.setHtmlWithSelection( '<p><a href="http://cksource.com">Link^</a></p>' );
+
+			resume( function() {
+				editor.ui.get( 'Unlink' ).click( editor );
+				assert.areSame( '<p>Link^</p>', bot.htmlWithSelection() );
+			} );
+
+			wait( 100 );
+		},
+
+		// #13062
+		'test unlink when cursor is right before the link and there are more than one link in paragraph': function() {
+			var editor = this.editor,
+				bot = this.editorBot;
+
+			bot.setHtmlWithSelection( '<p>I am<a href="http://foo"> an </a>in<a href="http://bar">sta</a>nce of <a href="http://ckeditor.com">^<s>CKEditor</s></a>.</p>' );
+
+			editor.ui.get( 'Unlink' ).click( editor );
+
+			assert.areSame( '<p>I am<a href="http://foo"> an </a>in<a href="http://bar">sta</a>nce of ^<s>CKEditor</s>.</p>', bot.htmlWithSelection() );
 		}
 	} );
 } )();

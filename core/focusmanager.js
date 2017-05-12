@@ -1,5 +1,5 @@
-﻿/**
- * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
+/**
+ * @license Copyright (c) 2003-2017, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
 
@@ -147,12 +147,22 @@
 		 * @member CKEDITOR.focusManager
 		 */
 		blur: function( noDelay ) {
-			if ( this._.locked )
+			if ( this._.locked ) {
 				return;
+			}
 
 			function doBlur() {
+				var editor = this._.editor;
+
 				if ( this.hasFocus ) {
 					this.hasFocus = false;
+
+					// Blink browsers leave selection in `[contenteditable=true]`
+					// when it's blurred and it's necessary to remove it manually for inline editor. (#13446)
+					// It seems to be related to https://bugs.chromium.org/p/chromium/issues/detail?id=433303.
+					if ( CKEDITOR.env.chrome && editor.elementMode == CKEDITOR.ELEMENT_MODE_INLINE ) {
+						editor.window.$.getSelection().removeAllRanges();
+					}
 
 					var ct = this._.editor.container;
 					ct && ct.removeClass( 'cke_focus' );
@@ -160,13 +170,14 @@
 				}
 			}
 
-			if ( this._.timer )
+			if ( this._.timer ) {
 				clearTimeout( this._.timer );
+			}
 
 			var delay = CKEDITOR.focusManager._.blurDelay;
-			if ( noDelay || !delay )
+			if ( noDelay || !delay ) {
 				doBlur.call( this );
-			else {
+			} else {
 				this._.timer = CKEDITOR.tools.setTimeout( function() {
 					delete this._.timer;
 					doBlur.call( this );

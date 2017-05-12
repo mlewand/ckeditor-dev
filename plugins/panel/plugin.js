@@ -1,5 +1,5 @@
-﻿/**
- * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
+/**
+ * @license Copyright (c) 2003-2017, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
 
@@ -307,6 +307,61 @@
 				item.focus();
 
 				this.onMark && this.onMark( item );
+			},
+
+			/**
+			 * Marks the first visible item or the one whose `aria-selected` attribute is set to `true`.
+			 * The latter has priority over the former.
+			 *
+			 * @private
+			 * @param beforeMark function to be executed just before marking.
+			 * Used in cases when any preparatory cleanup (like unmarking all items) would simultaneously
+			 * destroy the information that is needed to determine the focused item.
+			 */
+			markFirstDisplayed: function( beforeMark ) {
+				var notDisplayed = function( element ) {
+						return element.type == CKEDITOR.NODE_ELEMENT && element.getStyle( 'display' ) == 'none';
+					},
+					links = this._.getItems(),
+					item, focused;
+
+				for ( var i = links.count() - 1; i >= 0; i-- ) {
+					item = links.getItem( i );
+
+					if ( !item.getAscendant( notDisplayed ) ) {
+						focused = item;
+						this._.focusIndex = i;
+					}
+
+					if ( item.getAttribute( 'aria-selected' ) == 'true' ) {
+						focused = item;
+						this._.focusIndex = i;
+						break;
+					}
+				}
+
+				if ( !focused ) {
+					return;
+				}
+
+				if ( beforeMark ) {
+					beforeMark();
+				}
+
+				if ( CKEDITOR.env.webkit )
+					focused.getDocument().getWindow().focus();
+				focused.focus();
+
+				this.onMark && this.onMark( focused );
+			},
+
+			/**
+			 * Returns a `CKEDITOR.dom.nodeList` of block items.
+			 *
+			 * @returns {*|CKEDITOR.dom.nodeList}
+			 */
+			getItems: function() {
+				return this.element.getElementsByTag( 'a' );
 			}
 		},
 

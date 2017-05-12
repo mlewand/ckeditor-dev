@@ -1,5 +1,5 @@
 /* bender-tags: editor,unit,dom */
-/* global appendDomObjectTests, YUI */
+/* global appendDomObjectTests */
 
 var getInnerHtml = bender.tools.getInnerHtml,
 	getOuterHtml = function( element ) {
@@ -10,11 +10,28 @@ var getInnerHtml = bender.tools.getInnerHtml,
 		return new CKEDITOR.dom.element( element, ownerDocument );
 	};
 
+function testAttributes( element, expected, exclude ) {
+	var container = CKEDITOR.document.getById( 'getAttributes' ),
+		attributes;
+
+	element = container.findOne( element );
+	attributes = element.getAttributes( exclude );
+
+	assert.isObject( attributes );
+	objectAssert.areEqual( expected, attributes );
+}
+
 bender.test( appendDomObjectTests(
 	function( id ) {
 		return new CKEDITOR.dom.element( document.getElementById( id ) );
 	},
 	{
+		_should: {
+			ignore: {
+				test_isIdentical2: CKEDITOR.env.webkit && !CKEDITOR.env.chrome
+			}
+		},
+
 		test_$: function() {
 			var element = newElement( document.getElementById( 'test1' ) );
 			assert.areSame( document.getElementById( 'test1' ), element.$ );
@@ -478,6 +495,48 @@ bender.test( appendDomObjectTests(
 			assert.isFalse( element.hasAttributes(), 'hasAttributes should be false' );
 		},*/
 
+		test_getAttributes_no_attributes: function() {
+			testAttributes( 'b', {} );
+		},
+
+		test_getAttributes_1_attribute: function() {
+			testAttributes( 'i', {
+				id: 'getAttributes_1'
+			} );
+		},
+
+		test_getAttributes_2_attributes: function() {
+			testAttributes( 'p', {
+				id: 'getAttributes_2',
+				'data-attr': 'bogus'
+			} );
+		},
+
+		test_getAttributes_duplicated_attribute: function() {
+			testAttributes( 'span', {
+				'bogus-attr': 1
+			} );
+		},
+
+		test_getAttributes_unicode: function() {
+			testAttributes( 'em', {
+				'data-unicode': '☃'
+			} );
+		},
+
+		test_getAttributes_exclude: function() {
+			testAttributes( 'p', {
+				'data-attr': 'bogus'
+			}, [ 'id' ] );
+		},
+
+		test_getAttributes_exclude_wrong_format: function() {
+			testAttributes( 'p', {
+				id: 'getAttributes_2',
+				'data-attr': 'bogus'
+			}, 'id' );
+		},
+
 		test_getTabIndex1: function() {
 			var element = newElement( document.getElementById( 'tabIndex10' ) );
 			assert.areSame( 10, element.getTabIndex() );
@@ -577,21 +636,15 @@ bender.test( appendDomObjectTests(
 
 
 		test_getDocumentPosition: function() {
-			// Assign the page location of the element.
-			YUI().use( 'dom-screen', 'node', function( Y ) {
-				resume( function() {
-					Y.one( '#DocPositionTarget' ).setXY( [ 350, 450 ] );
-					var pos = CKEDITOR.document.getById( 'DocPositionTarget' ).getDocumentPosition(),
-						x = Math.round( pos.x ),
-						y = Math.round( pos.y ),
-						accOffset = 1;
+			var pos = CKEDITOR.document.getById( 'DocPositionTarget' ).getDocumentPosition(),
+				x = Math.round( pos.x ),
+				y = Math.round( pos.y ),
+				delta = 1,
+				expectedX = 280,
+				expectedY = 95;
 
-					assert.isNumberInRange( x, 350 - accOffset, 350 + accOffset, 'Position coordinates:x(350) relative to document doesn\'t match ' + x + ' with offset ' + accOffset + '.' );
-					assert.isNumberInRange( y, 450 - accOffset, 450 + accOffset, 'Position coordinates:y(450) relative to document doesn\'t match ' + y + 'with offset ' + accOffset + '.' );
-				} );
-			} );
-
-			wait();
+			assert.isNumberInRange( x, expectedX - delta, expectedX + delta, 'Position relative to document doesn\'t match ' + x + ' with offset ' + delta + '.' );
+			assert.isNumberInRange( y, expectedY - delta, expectedY + delta, 'Position relative to document doesn\'t match ' + y + 'with offset ' + delta + '.' );
 		},
 
 		'test getDocumentPosition with document scrolled': function() {
@@ -797,6 +850,16 @@ bender.test( appendDomObjectTests(
 			assert.isFalse( element.hasAttribute( 'id' ) );
 			assert.isFalse( element.hasAttribute( 'class' ) );
 			assert.areEqual( 'test2', element.getAttribute( 'title' ) );
+		},
+
+		test_removeAttributes_without_parameters: function() {
+			var element = doc.getById( 'removeAttributes_2' );
+
+			element.removeAttributes();
+
+			assert.isFalse( element.hasAttribute( 'id' ) );
+			assert.isFalse( element.hasAttribute( 'class' ) );
+			assert.isFalse( element.hasAttribute( 'title' ) );
 		},
 
 		test_removeStyle: function() {
@@ -1034,6 +1097,80 @@ bender.test( appendDomObjectTests(
 
 			el.forEach( recorder.fn, CKEDITOR.NODE_ELEMENT, true );
 			assert.areSame( 'p,i,div,h1,h2,b', recorder.tokens.join( ',' ) );
+		},
+
+		'test disableContextMenu - element with cke_enable_context_menu class': function() {
+			var target = doc.getById( 'disableContextMenu_1' ),
+				preventDefaultCalled = 0;
+
+			target.disableContextMenu();
+
+			target.fire( 'contextmenu', new CKEDITOR.dom.event( {
+				target: target.$,
+				preventDefault: function() {
+					++preventDefaultCalled;
+				}
+			} ) );
+
+			assert.areSame( 0, preventDefaultCalled, 'preventDefault was not called' );
+		},
+
+		'test disableContextMenu - ancestor with cke_enable_context_menu class': function() {
+			var target = doc.getById( 'disableContextMenu_2' ),
+				preventDefaultCalled = 0;
+
+			target.disableContextMenu();
+
+			target.fire( 'contextmenu', new CKEDITOR.dom.event( {
+				target: target.$,
+				preventDefault: function() {
+					++preventDefaultCalled;
+				}
+			} ) );
+
+			assert.areSame( 0, preventDefaultCalled, 'preventDefault was not called' );
+		},
+
+		'test disableContextMenu': function() {
+			var target = doc.getById( 'disableContextMenu_3' ),
+				preventDefaultCalled = 0;
+
+			target.disableContextMenu();
+
+			target.fire( 'contextmenu', new CKEDITOR.dom.event( {
+				target: target.$,
+				preventDefault: function() {
+					++preventDefaultCalled;
+				}
+			} ) );
+
+			assert.areSame( 1, preventDefaultCalled, 'preventDefault was called' );
+		},
+
+		'test setSize': function() {
+			// (#16753).
+			// For high dpi displays, things like border will often have a fraction of a pixel.
+			var elem = CKEDITOR.dom.element.createFromHtml( '<div style="height: 50px; border: 0.9px solid black"></div>' ),
+				realBorderWidth,
+				expectedWidth;
+
+			function round( num ) {
+				return Math.round( num * 100 ) / 100;
+			}
+
+			doc.getBody().append( elem );
+
+			// Actually due to different devicePixelRatio it will not necessairly be 1 pixel, it might be less.
+			realBorderWidth = parseFloat( elem.getComputedStyle( 'border-left-width' ) );
+			realBorderWidth = Math.round( realBorderWidth * 1000 ) / 1000;
+
+			expectedWidth = 200 - ( 2 * realBorderWidth );
+			// Browsers still will do some reasonable rounding on width, with an exception to IE8 which will round to full pixels.
+			expectedWidth = CKEDITOR.env.ie && CKEDITOR.env.version == 8 ? Math.round( expectedWidth ) : round( expectedWidth );
+
+			elem.setSize( 'width', 200, true );
+
+			assert.areSame( expectedWidth, round( parseFloat( elem.$.style.width ) ), 'Computed width' );
 		}
 	}
 ) );

@@ -1,5 +1,5 @@
 ﻿/**
- * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
+ * @license Copyright (c) 2003-2017, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
 
@@ -18,7 +18,7 @@
 
 	CKEDITOR.plugins.add( 'image2', {
 		// jscs:disable maximumLineLength
-		lang: 'af,ar,bg,bn,bs,ca,cs,cy,da,de,el,en,en-au,en-ca,en-gb,eo,es,et,eu,fa,fi,fo,fr,fr-ca,gl,gu,he,hi,hr,hu,id,is,it,ja,ka,km,ko,ku,lt,lv,mk,mn,ms,nb,nl,no,pl,pt,pt-br,ro,ru,si,sk,sl,sq,sr,sr-latn,sv,th,tr,tt,ug,uk,vi,zh,zh-cn', // %REMOVE_LINE_CORE%
+		lang: 'af,ar,az,bg,bn,bs,ca,cs,cy,da,de,de-ch,el,en,en-au,en-ca,en-gb,eo,es,et,eu,fa,fi,fo,fr,fr-ca,gl,gu,he,hi,hr,hu,id,is,it,ja,ka,km,ko,ku,lt,lv,mk,mn,ms,nb,nl,no,oc,pl,pt,pt-br,ro,ru,si,sk,sl,sq,sr,sr-latn,sv,th,tr,tt,ug,uk,vi,zh,zh-cn', // %REMOVE_LINE_CORE%
 		// jscs:enable maximumLineLength
 		requires: 'widget,dialog',
 		icons: 'image',
@@ -286,7 +286,7 @@
 			editables: {
 				caption: {
 					selector: 'figcaption',
-					allowedContent: 'br em strong sub sup u s; a[!href]'
+					allowedContent: 'br em strong sub sup u s; a[!href,target]'
 				}
 			},
 
@@ -410,7 +410,7 @@
 
 				// Update data.link object with attributes if the link has been discovered.
 				if ( editor.plugins.link && this.parts.link ) {
-					data.link = CKEDITOR.plugins.link.parseLinkAttributes( editor, this.parts.link );
+					data.link = helpers.getLinkAttributesParser()( editor, this.parts.link );
 
 					// Get rid of cke_widget_* classes in data. Otherwise
 					// they might appear in link dialog.
@@ -488,10 +488,22 @@
 			} )(),
 
 			upcast: upcastWidgetElement( editor ),
-			downcast: downcastWidgetElement( editor )
+			downcast: downcastWidgetElement( editor ),
+
+			getLabel: function() {
+				var label = ( this.data.alt || '' ) + ' ' + this.pathName;
+
+				return this.editor.lang.widget.label.replace( /%1/, label );
+			}
 		};
 	}
 
+	/**
+	 * A set of Enhanced Image (image2) plugin helpers.
+	 *
+	 * @class
+	 * @singleton
+	 */
 	CKEDITOR.plugins.image2 = {
 		stateShifter: function( editor ) {
 			// Tag name used for centering non-captioned widgets.
@@ -612,7 +624,7 @@
 								newEl = wrapInLink( img, shift.newData.link );
 
 							// Set and remove all attributes associated with this state.
-							var attributes = CKEDITOR.plugins.link.getLinkAttributes( editor, newValue );
+							var attributes = CKEDITOR.plugins.image2.getLinkAttributesGetter()( editor, newValue );
 
 							if ( !CKEDITOR.tools.isEmpty( attributes.set ) )
 								( newEl || link ).setAttributes( attributes.set );
@@ -730,10 +742,13 @@
 			};
 		},
 
-		// Checks whether current ratio of the image match the natural one.
-		// by comparing dimensions.
-		// @param {CKEDITOR.dom.element} image
-		// @returns {Boolean}
+		/**
+		 * Checks whether the current image ratio matches the natural one
+		 * by comparing dimensions.
+		 *
+		 * @param {CKEDITOR.dom.element} image
+		 * @returns {Boolean}
+		 */
 		checkHasNaturalRatio: function( image ) {
 			var $ = image.$,
 				natural = this.getNatural( image );
@@ -746,11 +761,14 @@
 				Math.round( $.clientHeight / natural.height * natural.width ) == $.clientWidth;
 		},
 
-		// Returns natural dimensions of the image. For modern browsers
-		// it uses natural(Width|Height) for old ones (IE8), creates
-		// a new image and reads dimensions.
-		// @param {CKEDITOR.dom.element} image
-		// @returns {Object}
+		/**
+		 * Returns natural dimensions of the image. For modern browsers
+		 * it uses natural(Width|Height). For old ones (IE8) it creates
+		 * a new image and reads the dimensions.
+		 *
+		 * @param {CKEDITOR.dom.element} image
+		 * @returns {Object}
+		 */
 		getNatural: function( image ) {
 			var dimensions;
 
@@ -770,6 +788,51 @@
 			}
 
 			return dimensions;
+		},
+
+		/**
+		 * Returns an attribute getter function. Default getter comes from the Link plugin
+		 * and is documented by {@link CKEDITOR.plugins.link#getLinkAttributes}.
+		 *
+		 * **Note:** It is possible to override this method and use a custom getter e.g.
+		 * in the absence of the Link plugin.
+		 *
+		 * **Note:** If a custom getter is used, a data model format it produces
+		 * must be compatible with {@link CKEDITOR.plugins.link#getLinkAttributes}.
+		 *
+		 * **Note:** A custom getter must understand the data model format produced by
+		 * {@link #getLinkAttributesParser} to work correctly.
+		 *
+		 * @returns {Function} A function that gets (composes) link attributes.
+		 * @since 4.5.5
+		 */
+		getLinkAttributesGetter: function() {
+			// #13885
+			return CKEDITOR.plugins.link.getLinkAttributes;
+		},
+
+		/**
+		 * Returns an attribute parser function. Default parser comes from the Link plugin
+		 * and is documented by {@link CKEDITOR.plugins.link#parseLinkAttributes}.
+		 *
+		 * **Note:** It is possible to override this method and use a custom parser e.g.
+		 * in the absence of the Link plugin.
+		 *
+		 * **Note:** If a custom parser is used, a data model format produced by the parser
+		 * must be compatible with {@link #getLinkAttributesGetter}.
+		 *
+		 * **Note:** If a custom parser is used, it should be compatible with the
+		 * {@link CKEDITOR.plugins.link#parseLinkAttributes} data model format. Otherwise the
+		 * Link plugin dialog may not be populated correctly with parsed data. However
+		 * as long as Enhanced Image is **not** used with the Link plugin dialog, any custom data model
+		 * will work, being stored as an internal property of Enhanced Image widget's data only.
+		 *
+		 * @returns {Function} A function that parses attributes.
+		 * @since 4.5.5
+		 */
+		getLinkAttributesParser: function() {
+			// #13885
+			return CKEDITOR.plugins.link.parseLinkAttributes;
 		}
 	};
 
@@ -1365,14 +1428,22 @@
 					onOk = def.onOk;
 
 				def.onShow = function() {
-					var widget = getFocusedWidget( editor );
+					var widget = getFocusedWidget( editor ),
+						displayTextField = this.getContentElement( 'info', 'linkDisplayText' ).getElement().getParent().getParent();
 
 					// Widget cannot be enclosed in a link, i.e.
 					//		<a>foo<inline widget/>bar</a>
-					if ( widget && ( widget.inline ? !widget.wrapper.getAscendant( 'a' ) : 1 ) )
+					if ( widget && ( widget.inline ? !widget.wrapper.getAscendant( 'a' ) : 1 ) ) {
 						this.setupContent( widget.data.link || {} );
-					else
+
+						// Hide the display text in case of linking image2 widget.
+						displayTextField.hide();
+					} else {
+						// Make sure that display text is visible, as it might be hidden by image2 integration
+						// before.
+						displayTextField.show();
 						onShow.apply( this, arguments );
+					}
 				};
 
 				// Set widget data if linking the widget using
@@ -1531,6 +1602,9 @@
 /**
  * A CSS class applied to the `<figure>` element of a captioned image.
  *
+ * Read more in the [documentation](#!/guide/dev_captionedimage) and see the
+ * [SDK sample](http://sdk.ckeditor.com/samples/captionedimage.html).
+ *
  *		// Changes the class to "captionedImage".
  *		config.image2_captionedClass = 'captionedImage';
  *
@@ -1543,6 +1617,9 @@ CKEDITOR.config.image2_captionedClass = 'image';
  * Determines whether dimension inputs should be automatically filled when the image URL changes in the Enhanced Image
  * plugin dialog window.
  *
+ * Read more in the [documentation](#!/guide/dev_captionedimage) and see the
+ * [SDK sample](http://sdk.ckeditor.com/samples/captionedimage.html).
+ *
  *		config.image2_prefillDimensions = false;
  *
  * @since 4.5
@@ -1552,6 +1629,9 @@ CKEDITOR.config.image2_captionedClass = 'image';
 
 /**
  * Disables the image resizer. By default the resizer is enabled.
+ *
+ * Read more in the [documentation](#!/guide/dev_captionedimage) and see the
+ * [SDK sample](http://sdk.ckeditor.com/samples/captionedimage.html).
  *
  *		config.image2_disableResizer = true;
  *
@@ -1610,7 +1690,23 @@ CKEDITOR.config.image2_captionedClass = 'image';
  *			display: inline-block;
  *		}
  *
+ * Read more in the [documentation](#!/guide/dev_captionedimage) and see the
+ * [SDK sample](http://sdk.ckeditor.com/samples/captionedimage.html).
+ *
  * @since 4.4
  * @cfg {String[]} [image2_alignClasses=null]
+ * @member CKEDITOR.config
+ */
+
+/**
+ * Determines whether alternative text is required for the captioned image.
+ *
+ *		config.image2_altRequired = true;
+ *
+ * Read more in the [documentation](#!/guide/dev_captionedimage) and see the
+ * [SDK sample](http://sdk.ckeditor.com/samples/captionedimage.html).
+ *
+ * @since 4.6.0
+ * @cfg {Boolean} [image2_altRequired=false]
  * @member CKEDITOR.config
  */

@@ -1,5 +1,5 @@
 /**
- * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
+ * @license Copyright (c) 2003-2017, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
 
@@ -310,13 +310,6 @@ CKEDITOR.dom.range = function( root ) {
 			// The second step is to handle full selection of the content between the left branch and the right branch.
 
 			while ( nextSibling ) {
-				// TODO this case and the below are exactly the same because endNode is part of endParents.
-				// The start and end nodes are on the same level. Handle this case fully here, because it's simple.
-				if ( nextSibling.equals( endNode ) ) {
-					lastConnectedLevel = level;
-					break;
-				}
-
 				// We can't clone entire endParent just like we can't clone entire startParent -
 				// - they are not fully selected with the range. Partial endParent selection
 				// will be cloned in the next loop.
@@ -374,10 +367,18 @@ CKEDITOR.dom.range = function( root ) {
 				}
 
 				levelParent = nextLevelParent;
+			} else if ( doClone ) {
+				// If this is "shared" node and we are in cloning mode we have to update levelParent to
+				// reflect that we visited the node (even though we didn't process it).
+				// If we don't do that, in next iterations nodes will be appended to wrong parent.
+				//
+				// We can just take first child because the algorithm guarantees
+				// that this will be the only child on this level. (#13568)
+				levelParent = levelParent.getChild( 0 );
 			}
 		}
 
-		// Detete or Extract.
+		// Delete or Extract.
 		// We need to update the range and if mergeThen was passed do it.
 		if ( !isClone ) {
 			mergeAndUpdate();
@@ -803,12 +804,12 @@ CKEDITOR.dom.range = function( root ) {
 				var sum = 0;
 
 				while ( ( node = node.getPrevious() ) && node.type == CKEDITOR.NODE_TEXT )
-					sum += node.getLength();
+					sum += node.getText().replace( CKEDITOR.dom.selection.FILLING_CHAR_SEQUENCE, '' ).length;
 
 				return sum;
 			}
 
-			function normalize( limit ) {
+			function normalizeTextNodes( limit ) {
 				var container = limit.container,
 					offset = limit.offset;
 
@@ -819,11 +820,13 @@ CKEDITOR.dom.range = function( root ) {
 					offset = container.getLength();
 				}
 
-				// Now, if limit is anchored in element and has at least two nodes before it,
+				// Now, if limit is anchored in element and has at least one node before it,
 				// it may happen that some of them will be merged. Normalize the offset
-				// by setting it to normalized index of its preceding node.
-				if ( container.type == CKEDITOR.NODE_ELEMENT && offset > 1 )
-					offset = container.getChild( offset - 1 ).getIndex( true ) + 1;
+				// by setting it to normalized index of its preceding, safe node.
+				// (safe == one for which getIndex(true) does not return -1, so one which won't disappear).
+				if ( container.type == CKEDITOR.NODE_ELEMENT && offset > 0 ) {
+					offset = getPrecedingSafeNodeIndex( container, offset ) + 1;
+				}
 
 				// The last step - fix the offset inside text node by adding
 				// lengths of preceding text nodes which will be merged with container.
@@ -869,6 +872,48 @@ CKEDITOR.dom.range = function( root ) {
 				limit.offset = offset;
 			}
 
+			function normalizeFCSeq( limit, root ) {
+				var fcseq = root.getCustomData( 'cke-fillingChar' );
+
+				if ( !fcseq ) {
+					return;
+				}
+
+				var container = limit.container;
+
+				if ( fcseq.equals( container ) ) {
+					limit.offset -= CKEDITOR.dom.selection.FILLING_CHAR_SEQUENCE.length;
+
+					// == 0		handles case when limit was at the end of FCS.
+					//  < 0		handles all cases where limit was somewhere in the middle or at the beginning.
+					//  > 0		(the "else" case) means cases where there are some more characters in the FCS node (FCSabc^def).
+					if ( limit.offset <= 0 ) {
+						limit.offset = container.getIndex();
+						limit.container = container.getParent();
+					}
+					return;
+				}
+
+				// And here goes the funny part - all other cases are handled inside node.getAddress() and getIndex() thanks to
+				// node.getIndex() being aware of FCS (handling it as an empty node).
+			}
+
+			// Finds a normalized index of a safe node preceding this one.
+			// Safe == one that will not disappear, so one for which getIndex( true ) does not return -1.
+			// Return -1 if there's no safe preceding node.
+			function getPrecedingSafeNodeIndex( container, offset ) {
+				var index;
+
+				while ( offset-- ) {
+					index = container.getChild( offset ).getIndex( true );
+
+					if ( index >= 0 )
+						return index;
+				}
+
+				return -1;
+			}
+
 			return function( normalized ) {
 				var collapsed = this.collapsed,
 					bmStart = {
@@ -881,10 +926,13 @@ CKEDITOR.dom.range = function( root ) {
 					};
 
 				if ( normalized ) {
-					normalize( bmStart );
+					normalizeTextNodes( bmStart );
+					normalizeFCSeq( bmStart, this.root );
 
-					if ( !collapsed )
-						normalize( bmEnd );
+					if ( !collapsed ) {
+						normalizeTextNodes( bmEnd );
+						normalizeFCSeq( bmEnd, this.root );
+					}
 				}
 
 				return {
@@ -1153,7 +1201,8 @@ CKEDITOR.dom.range = function( root ) {
 		/**
 		 * Expands the range so that partial units are completely contained.
 		 *
-		 * @param unit {Number} The unit type to expand with.
+		 * @param {Number} unit The unit type to expand with. Use one of following values: {@link CKEDITOR#ENLARGE_BLOCK_CONTENTS},
+		 * {@link CKEDITOR#ENLARGE_ELEMENT}, {@link CKEDITOR#ENLARGE_INLINE}, {@link CKEDITOR#ENLARGE_LIST_ITEM_CONTENTS}.
 		 * @param {Boolean} [excludeBrs=false] Whether include line-breaks when expanding.
 		 */
 		enlarge: function( unit, excludeBrs ) {
@@ -1666,18 +1715,28 @@ CKEDITOR.dom.range = function( root ) {
 		},
 
 		/**
-		 * Descrease the range to make sure that boundaries
-		 * always anchor beside text nodes or innermost element.
+		 * Decreases the range to make sure that boundaries
+		 * always anchor beside text nodes or the innermost element.
 		 *
 		 * @param {Number} mode The shrinking mode ({@link CKEDITOR#SHRINK_ELEMENT} or {@link CKEDITOR#SHRINK_TEXT}).
 		 *
-		 * * {@link CKEDITOR#SHRINK_ELEMENT} - Shrink the range boundaries to the edge of the innermost element.
-		 * * {@link CKEDITOR#SHRINK_TEXT} - Shrink the range boudaries to anchor by the side of enclosed text
-		 *     node, range remains if there's no text nodes on boundaries at all.
+		 * * {@link CKEDITOR#SHRINK_ELEMENT} &ndash; Shrinks the range boundaries to the edge of the innermost element.
+		 * * {@link CKEDITOR#SHRINK_TEXT} &ndash; Shrinks the range boundaries to anchor by the side of enclosed text
+		 *     node. The range remains if there are no text nodes available on boundaries.
 		 *
-		 * @param {Boolean} selectContents Whether result range anchors at the inner OR outer boundary of the node.
+		 * @param {Boolean} [selectContents=false] Whether the resulting range anchors at the inner OR outer boundary of the node.
+		 * @param {Boolean/Object} [options=true] If this parameter is of a Boolean type, it is treated as
+		 * `options.shrinkOnBlockBoundary`. This parameter was added in 4.7.0.
+		 * @param {Boolean} [options.shrinkOnBlockBoundary=true] Whether the block boundary should be included in
+		 * the shrunk range.
+		 * @param {Boolean} [options.skipBogus=false] Whether bogus `<br>` elements should be ignored while
+		 * `mode` is set to {@link CKEDITOR#SHRINK_TEXT}. This option was added in 4.7.0.
 		 */
-		shrink: function( mode, selectContents, shrinkOnBlockBoundary ) {
+		shrink: function( mode, selectContents, options ) {
+			var shrinkOnBlockBoundary = typeof options === 'boolean' ? options :
+				( options && typeof options.shrinkOnBlockBoundary === 'boolean' ? options.shrinkOnBlockBoundary : true ),
+				skipBogus = options && options.skipBogus;
+
 			// Unable to shrink a collapsed range.
 			if ( !this.collapsed ) {
 				mode = mode || CKEDITOR.SHRINK_TEXT;
@@ -1718,7 +1777,8 @@ CKEDITOR.dom.range = function( root ) {
 				}
 
 				var walker = new CKEDITOR.dom.walker( walkerRange ),
-					isBookmark = CKEDITOR.dom.walker.bookmark();
+					isBookmark = CKEDITOR.dom.walker.bookmark(),
+					isBogus = CKEDITOR.dom.walker.bogus();
 
 				walker.evaluator = function( node ) {
 					return node.type == ( mode == CKEDITOR.SHRINK_ELEMENT ? CKEDITOR.NODE_ELEMENT : CKEDITOR.NODE_TEXT );
@@ -1726,6 +1786,11 @@ CKEDITOR.dom.range = function( root ) {
 
 				var currentElement;
 				walker.guard = function( node, movingOut ) {
+					// Skipping bogus before other cases (#17010).
+					if ( skipBogus && isBogus( node ) ) {
+						return true;
+					}
+
 					if ( isBookmark( node ) )
 						return true;
 
@@ -1767,7 +1832,7 @@ CKEDITOR.dom.range = function( root ) {
 
 		/**
 		 * Inserts a node at the start of the range. The range will be expanded
-		 * the contain the node.
+		 * to contain the node.
 		 *
 		 * @param {CKEDITOR.dom.node} node
 		 */
@@ -1794,7 +1859,7 @@ CKEDITOR.dom.range = function( root ) {
 		},
 
 		/**
-		 * Moves the range to given position according to specified node.
+		 * Moves the range to a given position according to the specified node.
 		 *
 		 *		// HTML: <p>Foo <b>bar</b></p>
 		 *		range.moveToPosition( elB, CKEDITOR.POSITION_BEFORE_START );
@@ -1802,7 +1867,7 @@ CKEDITOR.dom.range = function( root ) {
 		 *
 		 * See also {@link #setStartAt} and {@link #setEndAt}.
 		 *
-		 * @param {CKEDITOR.dom.node} node The node according to which position will be set.
+		 * @param {CKEDITOR.dom.node} node The node according to which the position will be set.
 		 * @param {Number} position One of {@link CKEDITOR#POSITION_BEFORE_START},
 		 * {@link CKEDITOR#POSITION_AFTER_START}, {@link CKEDITOR#POSITION_BEFORE_END},
 		 * {@link CKEDITOR#POSITION_AFTER_END}.
@@ -2654,6 +2719,53 @@ CKEDITOR.dom.range = function( root ) {
 		getPreviousEditableNode: getNextEditableNode( 1 ),
 
 		/**
+		 * Returns any table element, like `td`, `tbody`, `table` etc. from a given range. The element
+		 * is returned only if the range is contained within one table (might be a nested
+		 * table, but it cannot be two different tables on the same DOM level).
+		 *
+		 * @private
+		 * @since 4.7
+		 * @param {Object} [tableElements] Mapping of element names that should be considered.
+		 * @returns {CKEDITOR.dom.element/null}
+		 */
+		_getTableElement: function( tableElements ) {
+			tableElements = tableElements || {
+				td: 1,
+				th: 1,
+				tr: 1,
+				tbody: 1,
+				thead: 1,
+				tfoot: 1,
+				table: 1
+			};
+
+			var start = this.startContainer,
+				end = this.endContainer,
+				startTable = start.getAscendant( 'table', true ),
+				endTable = end.getAscendant( 'table', true );
+
+			// Super weird edge case in Safari: if there is a table with only one cell inside and that cell
+			// is selected, then the end boundary of the table is moved into editor's editable.
+			// That case is also present when selecting the last cell inside nested table.
+			if ( CKEDITOR.env.safari && startTable && end.equals( this.root ) ) {
+				return start.getAscendant( tableElements, true );
+			}
+
+			if ( this.getEnclosedNode() ) {
+				return this.getEnclosedNode().getAscendant( tableElements, true );
+			}
+
+			// Ensure that selection starts and ends in the same table or one of the table is inside the other.
+			if ( startTable && endTable && ( startTable.equals( endTable ) || startTable.contains( endTable ) ||
+				endTable.contains( startTable ) ) ) {
+
+				return start.getAscendant( tableElements, true );
+			}
+
+			return null;
+		},
+
+		/**
 		 * Scrolls the start of current range into view.
 		 */
 		scrollIntoView: function() {
@@ -2713,9 +2825,7 @@ CKEDITOR.dom.range = function( root ) {
 			var isRootAscendantOrSelf = this.root.equals( startContainer ) || this.root.contains( startContainer );
 
 			if ( !isRootAscendantOrSelf ) {
-				window.console && console.log && console.log( // jshint ignore:line
-					'[CKEDITOR.dom.range.setStart] Element', startContainer, 'is not a descendant of root', this.root
-				);
+				CKEDITOR.warn( 'range-startcontainer', { startContainer: startContainer, root: this.root } );
 			}
 			// %REMOVE_END%
 			this.startContainer = startContainer;
@@ -2733,12 +2843,57 @@ CKEDITOR.dom.range = function( root ) {
 			var isRootAscendantOrSelf = this.root.equals( endContainer ) || this.root.contains( endContainer );
 
 			if ( !isRootAscendantOrSelf ) {
-				window.console && console.log && console.log( // jshint ignore:line
-					'[CKEDITOR.dom.range.setEnd] Element', endContainer, 'is not a descendant of root', this.root
-				);
+				CKEDITOR.warn( 'range-endcontainer', { endContainer: endContainer, root: this.root } );
 			}
 			// %REMOVE_END%
 			this.endContainer = endContainer;
+		},
+
+		/**
+		 * Looks for elements matching the `query` selector within a range.
+		 *
+		 * @since 4.5.11
+		 * @private
+		 * @param {String} query
+		 * @param {Boolean} [includeNonEditables=false] Whether elements with `contenteditable` set to `false` should
+		 * be included.
+		 * @returns {CKEDITOR.dom.element[]}
+		 */
+		_find: function( query, includeNonEditables ) {
+			var ancestor = this.getCommonAncestor(),
+				boundaries = this.getBoundaryNodes(),
+				// Contrary to CKEDITOR.dom.element#find we're returning array, that's because NodeList is immutable, and we need
+				// to do some filtering in returned list.
+				ret = [],
+				curItem,
+				i,
+				initialMatches,
+				isStartGood,
+				isEndGood;
+
+			if ( ancestor && ancestor.find ) {
+				initialMatches = ancestor.find( query );
+
+				for ( i = 0; i < initialMatches.count(); i++ ) {
+					curItem = initialMatches.getItem( i );
+
+					// Using isReadOnly() method to filterout non editables. It checks isContentEditable including all browser quirks.
+					if ( !includeNonEditables && curItem.isReadOnly() ) {
+						continue;
+					}
+
+					// It's not enough to get elements from common ancestor, because it migth contain too many matches.
+					// We need to ensure that returned items are between boundary points.
+					isStartGood = ( curItem.getPosition( boundaries.startNode ) & CKEDITOR.POSITION_FOLLOWING ) || boundaries.startNode.equals( curItem );
+					isEndGood = ( curItem.getPosition( boundaries.endNode ) & ( CKEDITOR.POSITION_PRECEDING + CKEDITOR.POSITION_IS_CONTAINED ) ) || boundaries.endNode.equals( curItem );
+
+					if ( isStartGood && isEndGood ) {
+						ret.push( curItem );
+					}
+				}
+			}
+
+			return ret;
 		}
 	};
 
@@ -2817,9 +2972,32 @@ CKEDITOR.POSITION_BEFORE_START = 3;
  */
 CKEDITOR.POSITION_AFTER_END = 4;
 
+/**
+ * @readonly
+ * @member CKEDITOR
+ * @property {Number} [=1]
+ */
 CKEDITOR.ENLARGE_ELEMENT = 1;
+
+/**
+ * @readonly
+ * @member CKEDITOR
+ * @property {Number} [=2]
+ */
 CKEDITOR.ENLARGE_BLOCK_CONTENTS = 2;
+
+/**
+ * @readonly
+ * @member CKEDITOR
+ * @property {Number} [=3]
+ */
 CKEDITOR.ENLARGE_LIST_ITEM_CONTENTS = 3;
+
+/**
+ * @readonly
+ * @member CKEDITOR
+ * @property {Number} [=4]
+ */
 CKEDITOR.ENLARGE_INLINE = 4;
 
 // Check boundary types.

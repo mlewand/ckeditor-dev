@@ -1,5 +1,5 @@
 ﻿/**
- * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
+ * @license Copyright (c) 2003-2017, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
 
@@ -7,13 +7,13 @@ CKEDITOR.plugins.add( 'contextmenu', {
 	requires: 'menu',
 
 	// jscs:disable maximumLineLength
-	lang: 'af,ar,bg,bn,bs,ca,cs,cy,da,de,el,en,en-au,en-ca,en-gb,eo,es,et,eu,fa,fi,fo,fr,fr-ca,gl,gu,he,hi,hr,hu,id,is,it,ja,ka,km,ko,ku,lt,lv,mk,mn,ms,nb,nl,no,pl,pt,pt-br,ro,ru,si,sk,sl,sq,sr,sr-latn,sv,th,tr,tt,ug,uk,vi,zh,zh-cn', // %REMOVE_LINE_CORE%
+	lang: 'af,ar,az,bg,bn,bs,ca,cs,cy,da,de,de-ch,el,en,en-au,en-ca,en-gb,eo,es,et,eu,fa,fi,fo,fr,fr-ca,gl,gu,he,hi,hr,hu,id,is,it,ja,ka,km,ko,ku,lt,lv,mk,mn,ms,nb,nl,no,oc,pl,pt,pt-br,ro,ru,si,sk,sl,sq,sr,sr-latn,sv,th,tr,tt,ug,uk,vi,zh,zh-cn', // %REMOVE_LINE_CORE%
 	// jscs:enable maximumLineLength
 
 	// Make sure the base class (CKEDITOR.menu) is loaded before it (#3318).
 	onLoad: function() {
 		/**
-		 * Class replacing the non-configurable native context menu with configurable CKEditor's equivalent.
+		 * Class replacing the non-configurable native context menu with a configurable CKEditor's equivalent.
 		 *
 		 * @class
 		 * @extends CKEDITOR.menu
@@ -40,11 +40,11 @@ CKEDITOR.plugins.add( 'contextmenu', {
 
 			proto: {
 				/**
-				 * Starts watching on native context menu triggers (option key, right click) on given element.
+				 * Starts watching on native context menu triggers (<kbd>Option</kbd> key, right click) on the given element.
 				 *
 				 * @param {CKEDITOR.dom.element} element
-				 * @param {Boolean} [nativeContextMenuOnCtrl] Whether to open native context menu if
-				 * *Ctrl* key is hold on opening the context menu. See {@link CKEDITOR.config#browserContextMenuOnCtrl}.
+				 * @param {Boolean} [nativeContextMenuOnCtrl] Whether to open native context menu if the
+				 * <kbd>Ctrl</kbd> key is held on opening the context menu. See {@link CKEDITOR.config#browserContextMenuOnCtrl}.
 				 */
 				addTarget: function( element, nativeContextMenuOnCtrl ) {
 					element.on( 'contextmenu', function( event ) {
@@ -103,7 +103,7 @@ CKEDITOR.plugins.add( 'contextmenu', {
 				},
 
 				/**
-				 * Opens context menu in given location. See the {@link CKEDITOR.menu#show} method.
+				 * Opens the context menu in the given location. See the {@link CKEDITOR.menu#show} method.
 				 *
 				 * @param {CKEDITOR.dom.element} offsetParent
 				 * @param {Number} [corner]
@@ -111,6 +111,10 @@ CKEDITOR.plugins.add( 'contextmenu', {
 				 * @param {Number} [offsetY]
 				 */
 				open: function( offsetParent, corner, offsetX, offsetY ) {
+					if ( this.editor.config.enableContextMenu === false ) {
+						return;
+					}
+
 					this.editor.focus();
 					offsetParent = offsetParent || CKEDITOR.document.getDocumentElement();
 
@@ -147,13 +151,24 @@ CKEDITOR.plugins.add( 'contextmenu', {
 } );
 
 /**
- * Whether to show the browser native context menu when the *Ctrl* or
- * *Meta* (Mac) key is pressed on opening the context menu with the
- * right mouse button click or the *Menu* key.
+ * Whether to show the browser native context menu when the <kbd>Ctrl</kbd> or
+ * <kbd>Meta</kbd> (Mac) key is pressed on opening the context menu with the
+ * right mouse button click or the <kbd>Menu</kbd> key.
  *
  *		config.browserContextMenuOnCtrl = false;
  *
  * @since 3.0.2
  * @cfg {Boolean} [browserContextMenuOnCtrl=true]
+ * @member CKEDITOR.config
+ */
+
+/**
+ * Whether to enable the context menu. Regardless of the setting the [Context Menu](http://ckeditor.com/addon/contextmenu)
+ * plugin is still loaded.
+ *
+ *		config.enableContextMenu = false;
+ *
+ * @since 4.7.0
+ * @cfg {Boolean} [enableContextMenu=true]
  * @member CKEDITOR.config
  */

@@ -1,5 +1,5 @@
-﻿/**
- * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
+/**
+ * @license Copyright (c) 2003-2017, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
  */
 
@@ -178,6 +178,14 @@ CKEDITOR.plugins.add( 'listblock', {
 
 					this.element.getDocument().getById( itemId + '_option' ).setAttribute( 'aria-selected', true );
 					this.onMark && this.onMark( item );
+				},
+
+				markFirstDisplayed: function() {
+					var context = this;
+					this._.markFirstDisplayed( function() {
+						if ( !context.multiSelect )
+							context.unmarkAll();
+					} );
 				},
 
 				unmark: function( value ) {
